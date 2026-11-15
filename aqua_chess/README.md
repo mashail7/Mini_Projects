@@ -56,7 +56,7 @@ No manual terminal setup is required! Simply double-click **`run.bat`** inside t
 
 1. **Clone the repository and navigate to the project folder:**
    ```bash
-   git clone [https://github.com/YOUR_USERNAME/Mini_Projects.git](https://github.com/YOUR_USERNAME/Mini_Projects.git)
+   git clone [https://github.com/mashail7/Mini_Projects.git](https://github.com/YOUR_USERNAME/Mini_Projects.git)
    cd Mini_Projects/aqua_chess
    ```
 
