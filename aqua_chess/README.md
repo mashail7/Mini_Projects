@@ -6,15 +6,15 @@ A desktop chess application featuring a custom-built Python chess engine and an 
 
 - **Human vs. AI** – Play chess against a custom-built chess engine.
 - **Three Difficulty Levels**
-  - 🏖️ Beach Breeze – Easy
-  - 🌊 High Tide – Medium
-  - 🌪️ Tsunami – Hard
+  - 🏖️ **Beach Breeze** – Easy
+  - 🌊 **High Tide** – Medium
+  - 🌪️ **Tsunami** – Hard
 - **Custom Chess Engine** – Negamax, Alpha-Beta Pruning, Iterative Deepening, and Quiescence Search.
-- **Custom SVG Pieces** – Twelve individually designed chess pieces.
+- **Custom SVG Pieces** – Twelve individually designed vector chess pieces embedded directly in code.
 - **Coastal UI** – Beach-inspired colors, visual effects, and a glassmorphism dashboard.
-- **Live Evaluation** – Position evaluation and captured-piece tracking.
-- **Responsive Interface** – Background AI calculations using Qt threading.
-- **Self-contained Design** – No external chess engine binaries, image assets, or sound files.
+- **Live Evaluation** – Real-time position evaluation bar and captured-piece tracking.
+- **Responsive Interface** – Non-blocking background AI calculations using Qt threading.
+- **Self-Contained Design** – Zero external chess engine binaries, image assets, or sound files required.
 
 ## 🛠️ Tech Stack
 
@@ -23,8 +23,8 @@ A desktop chess application featuring a custom-built Python chess engine and an 
 | Python 3.10+ | Core programming language |
 | PySide6 | Desktop GUI framework |
 | python-chess | Chess logic and move validation |
-| Qt (QThread, Signals & Slots) | Multithreading and UI responsiveness |
-| SVG / QPainter | Custom graphics and rendering |
+| Qt (`QThread`, `Signals & Slots`) | Multithreading and UI responsiveness |
+| SVG / `QPainter` | Custom vector graphics and rendering |
 
 ## 🧠 AI Engine
 
@@ -35,8 +35,20 @@ A custom chess engine implemented in pure Python, featuring:
 - Quiescence Search
 - MVV-LVA Move Ordering
 - Killer Move Heuristics
-- Piece-Square Tables
+- Piece-Square Tables (PST)
 - Zobrist Hashing and Transposition Table
+
+## 📁 Project Structure
+
+```text
+aqua_chess/
+├── main.py            # Application entry point & High-DPI setup
+├── engine.py          # Custom Negamax + Alpha-Beta AI engine
+├── ui.py              # PySide6 GUI, chessboard widget, and QThread worker
+├── assets.py          # Embedded SVG chess pieces and coastal QSS styles
+├── run.bat            # One-click automatic setup and launcher (Windows)
+└── requirements.txt   # Project dependencies
+```
 
 ## 🚀 Installation & Quick Start
 
@@ -56,7 +68,7 @@ No manual terminal setup is required! Simply double-click **`run.bat`** inside t
 
 1. **Clone the repository and navigate to the project folder:**
    ```bash
-   git clone [https://github.com/mashail7/Mini_Projects.git](https://github.com/YOUR_USERNAME/Mini_Projects.git)
+   git clone https://github.com/mashail7/Mini_Projects.git
    cd Mini_Projects/aqua_chess
    ```
 
@@ -81,7 +93,7 @@ No manual terminal setup is required! Simply double-click **`run.bat`** inside t
    ```bash
    python main.py
    ```
-   
+
 ## 🎨 Design Philosophy
 
 Aqua Chess combines traditional chess gameplay with a relaxing coastal atmosphere.
@@ -92,6 +104,6 @@ The goal is to create a lightweight, visually engaging chess experience powered 
 
 ---
 
-**Status:** In Development
+**Status:** Active / Completed
 
 *Built with Python, creativity, and a passion for chess.*
