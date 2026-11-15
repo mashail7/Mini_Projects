@@ -43,8 +43,8 @@ A custom chess engine implemented in pure Python, featuring:
 **1. Clone the repository**
 
 ```bash
-git clone <repository-url>
-cd Aqua-Chess
+git clone https://github.com/mashail7/Mini_Projects.git
+cd Mini_Projects/Aqua-Chess
 ```
 
 **2. Create a virtual environment**
@@ -70,10 +70,8 @@ pip install -r requirements.txt
 **5. Run the application**
 
 ```bash
-python <entry-point>.py
+run.bat
 ```
-
-Replace `<entry-point>.py` with the actual Python file that starts the application.
 
 ## 🎨 Design Philosophy
 
