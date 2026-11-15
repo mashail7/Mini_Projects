@@ -38,41 +38,50 @@ A custom chess engine implemented in pure Python, featuring:
 - Piece-Square Tables
 - Zobrist Hashing and Transposition Table
 
-## 🚀 Installation & Setup
+## 🚀 Installation & Quick Start
 
-**1. Clone the repository**
+### Prerequisites
+- **Python 3.10+** installed on your system (make sure **"Add Python to PATH"** is checked on Windows).
 
-```bash
-git clone https://github.com/mashail7/Mini_Projects.git
-cd Mini_Projects/Aqua-Chess
-```
+---
 
-**2. Create a virtual environment**
+### ⚡ Option 1: One-Click Start (Windows — Recommended)
+No manual terminal setup is required! Simply double-click **`run.bat`** inside the `aqua_chess` folder:
+1. **First Launch:** `run.bat` automatically detects that `.venv` is missing, creates the isolated virtual environment, and installs all dependencies from `requirements.txt`.
+2. **Subsequent Launches:** Instantly starts **Aqua Chess** in background windowless mode (`pythonw.exe`) without any console popups.
 
-```bash
-python -m venv .venv
-```
+---
 
-**3. Activate the environment**
+### 🛠️ Option 2: Manual Terminal Setup (Windows / macOS / Linux)
 
-Windows:
+1. **Clone the repository and navigate to the project folder:**
+   ```bash
+   git clone [https://github.com/YOUR_USERNAME/Mini_Projects.git](https://github.com/YOUR_USERNAME/Mini_Projects.git)
+   cd Mini_Projects/aqua_chess
+   ```
 
-```bash
-.venv\Scripts\activate
-```
+2. **Create and activate a virtual environment:**
+   - **Windows:**
+     ```bash
+     python -m venv .venv
+     .venv\Scripts\activate
+     ```
+   - **macOS / Linux:**
+     ```bash
+     python3 -m venv .venv
+     source .venv/bin/activate
+     ```
 
-**4. Install dependencies**
+3. **Install the required dependencies:**
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-```bash
-pip install -r requirements.txt
-```
-
-**5. Run the application**
-
-```bash
-run.bat
-```
-
+4. **Launch the game:**
+   ```bash
+   python main.py
+   ```
+   
 ## 🎨 Design Philosophy
 
 Aqua Chess combines traditional chess gameplay with a relaxing coastal atmosphere.
