@@ -1,15 +1,19 @@
 """
 Aqua Chess — Main GUI Module
-Beach & Ocean themed chess interface built with PySide6.
+Beach & Ocean Resort themed chess interface built with PySide6.
+
+Features an immersive coastal panorama background, 3D driftwood & brass
+chessboard, textured lagoon/sand squares, and glassmorphism sidebar.
 """
 
 import copy
+import math
 import chess
 
 from PySide6.QtCore import Qt, Signal, QSize, QByteArray, QRectF, QPointF, QThread
 from PySide6.QtGui import (
-    QPainter, QColor, QFont, QLinearGradient, QPen, QBrush, QIcon,
-    QPainterPath,
+    QPainter, QColor, QFont, QLinearGradient, QRadialGradient, QPen, QBrush,
+    QIcon, QPainterPath, QConicalGradient,
 )
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
@@ -106,11 +110,14 @@ class PromotionDialog(QDialog):
             btn.setStyleSheet(
                 "QPushButton {"
                 "  background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
-                "    stop:0 #E0F7FA, stop:1 #B2EBF2);"
-                "  border: 2px solid #00838F;"
-                "  border-radius: 8px;"
+                "    stop:0 rgba(10,38,54,0.85), stop:1 rgba(7,26,36,0.95));"
+                "  border: 2px solid rgba(128,255,219,0.45);"
+                "  border-radius: 10px;"
                 "}"
-                "QPushButton:hover { background: #B2EBF2; }"
+                "QPushButton:hover {"
+                "  background: rgba(42,157,143,0.55);"
+                "  border-color: #E76F51;"
+                "}"
             )
             svg_key = (color, piece_type)
             svg_data = PIECE_SVGS.get(svg_key, "")
@@ -132,8 +139,9 @@ class PromotionDialog(QDialog):
         self.setStyleSheet(
             "QDialog {"
             "  background: qlineargradient(x1:0,y1:0,x2:1,y2:1,"
-            "    stop:0 #E0F7FA, stop:1 #FFF8E1);"
-            "  border-radius: 12px;"
+            "    stop:0 rgba(10,38,54,0.92), stop:1 rgba(7,26,36,0.97));"
+            "  border: 1px solid rgba(128,255,219,0.35);"
+            "  border-radius: 14px;"
             "}"
         )
 
@@ -165,8 +173,7 @@ class EvalBar(QWidget):
     @staticmethod
     def _score_to_ratio(cp: int) -> float:
         """Return 0..1 where 0.5 = equal, 1.0 = white winning fully."""
-        import math
-        # k chosen so that sigmoid(500*k)≈0.8  =>  k ≈ ln(4)/500 ≈ 0.00277
+        # k chosen so that sigmoid(500*k)≈0.8  => k ≈ ln(4)/500 ≈ 0.00277
         k = 0.00277
         return 1.0 / (1.0 + math.exp(-k * cp))
 
@@ -185,7 +192,6 @@ class EvalBar(QWidget):
         # Determine if the score is a mate score (very large absolute value)
         is_mate = abs(self.eval_score) > 90000
         if is_mate:
-            mate_in = abs(self.eval_score) - 100000
             if self.eval_score > 0:
                 white_ratio = 1.0
             else:
@@ -196,21 +202,21 @@ class EvalBar(QWidget):
         # Black region (top)
         black_h = int(h * (1.0 - white_ratio))
         black_grad = QLinearGradient(0, 0, 0, black_h)
-        black_grad.setColorAt(0.0, QColor("#1A3C40"))
-        black_grad.setColorAt(1.0, QColor("#2E5D62"))
+        black_grad.setColorAt(0.0, QColor("#071A24"))
+        black_grad.setColorAt(1.0, QColor("#133B4E"))
         painter.setBrush(QBrush(black_grad))
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawRect(0, 0, w, black_h)
 
         # White region (bottom)
         white_grad = QLinearGradient(0, black_h, 0, h)
-        white_grad.setColorAt(0.0, QColor("#F5F0E1"))
-        white_grad.setColorAt(1.0, QColor("#FFF8E7"))
+        white_grad.setColorAt(0.0, QColor("#F3E5AB"))
+        white_grad.setColorAt(1.0, QColor("#FFFDF9"))
         painter.setBrush(QBrush(white_grad))
         painter.drawRect(0, black_h, w, h - black_h)
 
         # Divider line
-        painter.setPen(QPen(QColor("#00838F"), 1.5))
+        painter.setPen(QPen(QColor("#D4AF37"), 1.5))
         painter.drawLine(0, black_h, w, black_h)
 
         # Eval text
@@ -227,18 +233,18 @@ class EvalBar(QWidget):
         # Draw text in the region that has more space
         if white_ratio >= 0.5:
             # Draw in white region
-            painter.setPen(QColor("#1A3C40"))
+            painter.setPen(QColor("#071A24"))
             text_rect = QRectF(0, max(black_h, h - 28), w, 24)
         else:
             # Draw in black region
-            painter.setPen(QColor("#FFF8E7"))
+            painter.setPen(QColor("#FFFDF9"))
             text_rect = QRectF(0, min(black_h - 24, 4), w, 24)
 
         painter.drawText(text_rect, Qt.AlignmentFlag.AlignCenter, text)
 
         # Outer glass border
         painter.setClipping(False)
-        painter.setPen(QPen(QColor(255, 255, 255, 70), 1.5))
+        painter.setPen(QPen(QColor(128, 255, 219, 70), 1.5))
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawRoundedRect(QRectF(0.75, 0.75, w - 1.5, h - 1.5), 8, 8)
 
@@ -246,14 +252,12 @@ class EvalBar(QWidget):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# ChessBoard — interactive board widget
+# ChessBoard — interactive board widget with 3D driftwood frame
 # ═══════════════════════════════════════════════════════════════════════════
 class ChessBoard(QWidget):
     """Interactive chess board drawn with QPainter."""
 
     move_made = Signal(object)
-
-    BORDER = 30  # px for coordinate border
 
     def __init__(self, board: chess.Board, parent=None):
         super().__init__(parent)
@@ -271,12 +275,18 @@ class ChessBoard(QWidget):
         return QSize(600, 600)
 
     # ----- coordinate helpers -----
-    def _square_size(self) -> float:
-        usable = max(80.0, min(self.width(), self.height()) - 2 * self.BORDER)
-        return usable / 8.0
+    def _geometry(self):
+        board_total = min(self.width(), self.height()) - 16.0
+        origin_x = (self.width() - board_total) / 2.0
+        origin_y = (self.height() - board_total) / 2.0
+        margin = max(34.0, board_total * 0.058)
+        sq_size = (board_total - 2.0 * margin) / 8.0
+        grid_x = origin_x + margin
+        grid_y = origin_y + margin
+        return board_total, origin_x, origin_y, margin, sq_size, grid_x, grid_y
 
     def _square_rect(self, sq: int) -> QRectF:
-        ss = self._square_size()
+        board_total, origin_x, origin_y, margin, sq_size, grid_x, grid_y = self._geometry()
         file = chess.square_file(sq)
         rank = chess.square_rank(sq)
         if self.flipped:
@@ -285,18 +295,18 @@ class ChessBoard(QWidget):
         else:
             col = file
             row = 7 - rank
-        x = self.BORDER + col * ss
-        y = self.BORDER + row * ss
-        return QRectF(x, y, ss, ss)
+        x = grid_x + col * sq_size
+        y = grid_y + row * sq_size
+        return QRectF(x, y, sq_size, sq_size)
 
     def _pos_to_square(self, pos) -> int | None:
-        ss = self._square_size()
-        x = pos.x() - self.BORDER
-        y = pos.y() - self.BORDER
+        board_total, origin_x, origin_y, margin, sq_size, grid_x, grid_y = self._geometry()
+        x = pos.x() - grid_x
+        y = pos.y() - grid_y
         if x < 0 or y < 0:
             return None
-        col = int(x / ss)
-        row = int(y / ss)
+        col = int(x / sq_size)
+        row = int(y / sq_size)
         if col < 0 or col > 7 or row < 0 or row > 7:
             return None
         if self.flipped:
@@ -311,104 +321,163 @@ class ChessBoard(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setClipping(False)
 
-        ss = self._square_size()
-        board_px = ss * 8
+        board_total, origin_x, origin_y, margin, sq_size, grid_x, grid_y = self._geometry()
+        ss = sq_size
 
-        # ---- border ----
-        border_color = QColor(COLORS["board_border"])
+        # ──── 3D Driftwood & Brass Frame ────
+        frame_rect = QRectF(origin_x, origin_y, board_total, board_total)
+
+        # Outer driftwood border gradient
+        wood_grad = QLinearGradient(origin_x, origin_y, origin_x + board_total, origin_y + board_total)
+        wood_grad.setColorAt(0.0, QColor("#8D6E63"))
+        wood_grad.setColorAt(0.2, QColor("#A08070"))
+        wood_grad.setColorAt(0.4, QColor("#6D4C3D"))
+        wood_grad.setColorAt(0.6, QColor("#9E8070"))
+        wood_grad.setColorAt(0.8, QColor("#7D5E4F"))
+        wood_grad.setColorAt(1.0, QColor("#8D6E63"))
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QBrush(border_color))
-        painter.drawRect(QRectF(0, 0, board_px + 2 * self.BORDER, board_px + 2 * self.BORDER))
+        painter.setBrush(QBrush(wood_grad))
+        border_path = QPainterPath()
+        border_path.addRoundedRect(frame_rect, 6, 6)
+        painter.drawPath(border_path)
 
-        # ---- coordinate labels ----
-        coord_color = QColor(COLORS["coord_text"])
-        coord_font = QFont("Segoe UI", max(8, int(ss * 0.22)), QFont.Weight.Bold)
-        painter.setFont(coord_font)
+        # Wood grain texture lines (subtle diagonal)
+        painter.save()
+        painter.setClipPath(border_path)
+        painter.setPen(QPen(QColor(0, 0, 0, 18), 0.5))
+        start_i = int(origin_x) - 20
+        end_i = int(origin_x + board_total) + 40
+        for i in range(start_i, end_i, 4):
+            painter.drawLine(QPointF(i, origin_y), QPointF(i - 15, origin_y + board_total))
+        painter.restore()
+
+        # Inner beveled gold/coral trim line
+        inner_frame = QRectF(grid_x - 2.5, grid_y - 2.5, 8 * sq_size + 5, 8 * sq_size + 5)
+        painter.setPen(QPen(QColor("#D4AF37"), 2.0))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRect(inner_frame)
+
+        # Subtle coral inner highlight
+        inner_frame2 = QRectF(grid_x - 0.5, grid_y - 0.5, 8 * sq_size + 1, 8 * sq_size + 1)
+        painter.setPen(QPen(QColor(231, 111, 81, 80), 0.8))
+        painter.drawRect(inner_frame2)
+
+        # ──── Coordinate labels (nautical gold/sand) ────
+        coord_color = QColor(COLORS.get("coord_text", "#D4AF37"))
+        font = QFont("Segoe UI")
+        font.setPixelSize(max(12, int(margin * 0.46)))
+        font.setBold(True)
+        painter.setFont(font)
         painter.setPen(coord_color)
 
-        for i in range(8):
-            # File labels (a–h) along bottom
-            file_idx = (7 - i) if self.flipped else i
+        for col in range(8):
+            file_idx = (7 - col) if self.flipped else col
             file_label = chr(ord("a") + file_idx)
-            x = self.BORDER + i * ss + ss / 2
-            painter.drawText(
-                QRectF(x - 10, self.BORDER + board_px + 2, 20, self.BORDER - 4),
-                Qt.AlignmentFlag.AlignCenter,
-                file_label,
-            )
-            # Also along top
-            painter.drawText(
-                QRectF(x - 10, 2, 20, self.BORDER - 4),
-                Qt.AlignmentFlag.AlignCenter,
-                file_label,
-            )
+            # Top
+            top_rect = QRectF(grid_x + col * sq_size, origin_y, sq_size, margin)
+            painter.drawText(top_rect, Qt.AlignmentFlag.AlignCenter, file_label)
+            # Bottom
+            bottom_rect = QRectF(grid_x + col * sq_size, grid_y + 8 * sq_size, sq_size, margin)
+            painter.drawText(bottom_rect, Qt.AlignmentFlag.AlignCenter, file_label)
 
-            # Rank labels (1–8) along left
-            rank_idx = i if self.flipped else (7 - i)
+        for row in range(8):
+            rank_idx = row if self.flipped else (7 - row)
             rank_label = str(rank_idx + 1)
-            y = self.BORDER + i * ss + ss / 2
-            painter.drawText(
-                QRectF(2, y - 10, self.BORDER - 4, 20),
-                Qt.AlignmentFlag.AlignCenter,
-                rank_label,
-            )
-            # Also along right
-            painter.drawText(
-                QRectF(self.BORDER + board_px + 2, y - 10, self.BORDER - 4, 20),
-                Qt.AlignmentFlag.AlignCenter,
-                rank_label,
-            )
+            # Left
+            left_rect = QRectF(origin_x, grid_y + row * sq_size, margin, sq_size)
+            painter.drawText(left_rect, Qt.AlignmentFlag.AlignCenter, rank_label)
+            # Right
+            right_rect = QRectF(grid_x + 8 * sq_size, grid_y + row * sq_size, margin, sq_size)
+            painter.drawText(right_rect, Qt.AlignmentFlag.AlignCenter, rank_label)
 
-        # ---- squares ----
-        light = QColor(COLORS["light_square"])
-        dark = QColor(COLORS["dark_square"])
-
+        # ──── Squares with textured gradients ────
         for sq in chess.SQUARES:
             rect = self._square_rect(sq)
             file = chess.square_file(sq)
             rank = chess.square_rank(sq)
             is_light = (file + rank) % 2 == 1
+
+            if is_light:
+                # Warm sunlit sand gradient
+                sq_grad = QLinearGradient(rect.topLeft(), rect.bottomRight())
+                sq_grad.setColorAt(0.0, QColor("#FAF0CA"))
+                sq_grad.setColorAt(1.0, QColor("#EAD2AC"))
+                painter.setBrush(QBrush(sq_grad))
+            else:
+                # Deep tropical lagoon gradient
+                sq_grad = QLinearGradient(rect.topLeft(), rect.bottomRight())
+                sq_grad.setColorAt(0.0, QColor("#1D7874"))
+                sq_grad.setColorAt(1.0, QColor("#13505B"))
+                painter.setBrush(QBrush(sq_grad))
+
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QBrush(light if is_light else dark))
             painter.drawRect(rect)
 
-        # ---- last move highlight ----
+            # Delicate inner border for light squares
+            if is_light:
+                painter.setPen(QPen(QColor(212, 175, 55, 30), 0.5))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawRect(rect.adjusted(1, 1, -1, -1))
+            else:
+                # Subtle diagonal water-shimmer highlight on dark squares
+                shimmer_path = QPainterPath()
+                shimmer_path.moveTo(rect.topRight())
+                shimmer_path.lineTo(rect.right() - ss * 0.35, rect.top())
+                shimmer_path.lineTo(rect.left(), rect.bottom() - ss * 0.35)
+                shimmer_path.lineTo(rect.bottomLeft())
+                shimmer_path.lineTo(rect.left() + ss * 0.35, rect.bottom())
+                shimmer_path.lineTo(rect.right(), rect.top() + ss * 0.35)
+                shimmer_path.closeSubpath()
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QBrush(QColor(128, 255, 219, 10)))
+                painter.drawPath(shimmer_path)
+
+        # ──── Last move highlight: warm sunset coral-amber ────
         if self.last_move is not None:
-            lm_color = QColor(COLORS["last_move"])
-            lm_color.setAlpha(90)
+            lm_color = QColor(244, 162, 97, 115)  # rgba(244, 162, 97, 0.45)
             painter.setBrush(QBrush(lm_color))
             painter.setPen(Qt.PenStyle.NoPen)
             for sq in (self.last_move.from_square, self.last_move.to_square):
                 painter.drawRect(self._square_rect(sq))
 
-        # ---- selected square highlight ----
+        # ──── Selected square highlight: glowing golden-aqua ring ────
         if self.selected_square is not None:
-            sel_color = QColor(COLORS["selected"])
-            sel_color.setAlpha(120)
+            sel_rect = self._square_rect(self.selected_square)
+            # Golden fill
+            sel_color = QColor(212, 175, 55, 80)
             painter.setBrush(QBrush(sel_color))
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawRect(self._square_rect(self.selected_square))
+            painter.drawRect(sel_rect)
+            # Golden-aqua ring
+            ring_pen = QPen(QColor("#D4AF37"), max(2, ss * 0.06))
+            ring_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            painter.setPen(ring_pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRect(sel_rect.adjusted(1.5, 1.5, -1.5, -1.5))
 
-        # ---- check highlight ----
+        # ──── Check highlight: pulsing crimson-coral radial glow ────
         if self.board.is_check():
             king_sq = self.board.king(self.board.turn)
             if king_sq is not None:
                 kr = self._square_rect(king_sq)
                 center = kr.center()
-                radius = ss * 0.48
-                check_grad = QLinearGradient(
-                    center.x() - radius, center.y() - radius,
-                    center.x() + radius, center.y() + radius,
-                )
-                check_grad.setColorAt(0.0, QColor(255, 60, 60, 130))
-                check_grad.setColorAt(0.5, QColor(255, 30, 30, 80))
-                check_grad.setColorAt(1.0, QColor(255, 60, 60, 130))
+                radius = ss * 0.52
+                check_grad = QRadialGradient(center, radius)
+                check_grad.setColorAt(0.0, QColor(230, 57, 70, 180))
+                check_grad.setColorAt(0.4, QColor(231, 111, 81, 120))
+                check_grad.setColorAt(0.7, QColor(244, 162, 97, 60))
+                check_grad.setColorAt(1.0, QColor(244, 162, 97, 0))
                 painter.setBrush(QBrush(check_grad))
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.drawEllipse(center, radius, radius)
+                # Crisp ring
+                painter.setPen(QPen(QColor(230, 57, 70, 160), max(1.5, ss * 0.04)))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawEllipse(center, ss * 0.44, ss * 0.44)
 
-        # ---- pieces ----
+        # ──── Pieces ────
         for sq in chess.SQUARES:
             piece = self.board.piece_at(sq)
             if piece is None:
@@ -424,24 +493,36 @@ class ChessBoard(QWidget):
             piece_rect = rect.adjusted(padding, padding, -padding, -padding)
             renderer.render(painter, piece_rect)
 
-        # ---- legal move indicators ----
+        # ──── Legal move indicators ────
         if self.selected_square is not None:
-            seafoam = QColor("#66CDAA")
-            seafoam.setAlpha(190)
             for move in self.legal_moves_for_selected:
                 target_rect = self._square_rect(move.to_square)
                 center = target_rect.center()
                 target_piece = self.board.piece_at(move.to_square)
+
                 if target_piece is not None:
-                    # Capture indicator: prominent coral target ring around piece
-                    painter.setPen(QPen(QColor("#E76F51"), max(2.5, ss * 0.08)))
-                    painter.setBrush(Qt.BrushStyle.NoBrush)
+                    # Capture indicator: coral-ringed target on capturable enemy pieces
+                    painter.setPen(QPen(QColor("#E76F51"), max(2.5, ss * 0.07)))
+                    painter.setBrush(QBrush(QColor(231, 111, 81, 35)))
                     painter.drawEllipse(center, ss * 0.42, ss * 0.42)
+                    # Inner ring
+                    painter.setPen(QPen(QColor(244, 162, 97, 120), max(1, ss * 0.03)))
+                    painter.setBrush(Qt.BrushStyle.NoBrush)
+                    painter.drawEllipse(center, ss * 0.35, ss * 0.35)
                 else:
-                    # Empty square: small seafoam filled circle
+                    # Empty square: translucent water-droplet / ripple ring
+                    # Outer ripple
+                    painter.setPen(QPen(QColor(128, 255, 219, 80), max(1, ss * 0.025)))
+                    painter.setBrush(Qt.BrushStyle.NoBrush)
+                    painter.drawEllipse(center, ss * 0.22, ss * 0.22)
+                    # Inner filled droplet
                     painter.setPen(Qt.PenStyle.NoPen)
-                    painter.setBrush(QBrush(seafoam))
-                    painter.drawEllipse(center, ss * 0.16, ss * 0.16)
+                    drop_grad = QRadialGradient(center, ss * 0.16)
+                    drop_grad.setColorAt(0.0, QColor(128, 255, 219, 160))
+                    drop_grad.setColorAt(0.6, QColor(128, 255, 219, 90))
+                    drop_grad.setColorAt(1.0, QColor(128, 255, 219, 30))
+                    painter.setBrush(QBrush(drop_grad))
+                    painter.drawEllipse(center, ss * 0.14, ss * 0.14)
 
         painter.end()
 
@@ -525,19 +606,292 @@ class ChessBoard(QWidget):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# CentralBackground — paints coastal gradient behind everything
+# CentralBackground — paints immersive coastal beach panorama
 # ═══════════════════════════════════════════════════════════════════════════
 class CentralBackground(QWidget):
-    """Central widget that paints a coastal gradient background."""
+    """Central widget that paints an attractive tropical beach & ocean resort panorama."""
 
     def paintEvent(self, event):
         painter = QPainter(self)
-        grad = QLinearGradient(0, 0, 0, self.height())
-        grad.setColorAt(0.0, QColor("#0D3B66"))   # deep ocean
-        grad.setColorAt(0.35, QColor("#1B6B7D"))  # mid-sea
-        grad.setColorAt(0.7, QColor("#5AB0B2"))   # shallows
-        grad.setColorAt(1.0, QColor("#C8E6C9"))   # sandy shore
-        painter.fillRect(self.rect(), grad)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w = float(self.width())
+        h = float(self.height())
+
+        # ──── 1. Sunlit Tropical Sky (y = 0 to 0.38 * h) ────
+        sky_h = 0.38 * h
+        sky_grad = QLinearGradient(0, 0, 0, sky_h)
+        sky_grad.setColorAt(0.0, QColor("#1E88E5"))   # Top azure
+        sky_grad.setColorAt(0.55, QColor("#4DD0E1"))  # Mid cyan
+        sky_grad.setColorAt(1.0, QColor("#FFF59D"))   # Warm horizon glow
+        painter.fillRect(QRectF(0, 0, w, sky_h), sky_grad)
+
+        # Glowing Sun centered at (0.72 * w, 0.14 * h) with radius 0.12 * w
+        sun_cx = 0.72 * w
+        sun_cy = 0.14 * h
+        sun_r = 0.12 * w
+        sun_grad = QRadialGradient(sun_cx, sun_cy, sun_r)
+        sun_grad.setColorAt(0.0, QColor("#FFFFFF"))
+        sun_grad.setColorAt(0.35, QColor("#FFE082"))
+        sun_grad.setColorAt(1.0, QColor(255, 224, 130, 0))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(sun_grad))
+        painter.drawEllipse(QPointF(sun_cx, sun_cy), sun_r, sun_r)
+
+        # Soft Clouds (3 layered translucent white cloud silhouettes)
+        cloud_color = QColor(255, 255, 255, 90)  # rgba(255, 255, 255, 0.35)
+        painter.setBrush(QBrush(cloud_color))
+        painter.setPen(Qt.PenStyle.NoPen)
+
+        # Cloud 1: left sky
+        c1 = QPainterPath()
+        c1.moveTo(0.08 * w, 0.15 * h)
+        c1.cubicTo(0.12 * w, 0.10 * h, 0.20 * w, 0.10 * h, 0.24 * w, 0.14 * h)
+        c1.cubicTo(0.28 * w, 0.11 * h, 0.34 * w, 0.12 * h, 0.36 * w, 0.16 * h)
+        c1.cubicTo(0.38 * w, 0.18 * h, 0.36 * w, 0.22 * h, 0.30 * w, 0.22 * h)
+        c1.cubicTo(0.24 * w, 0.23 * h, 0.12 * w, 0.22 * h, 0.08 * w, 0.18 * h)
+        c1.closeSubpath()
+        painter.drawPath(c1)
+
+        # Cloud 2: center/near sun
+        c2 = QPainterPath()
+        c2.moveTo(0.44 * w, 0.18 * h)
+        c2.cubicTo(0.48 * w, 0.13 * h, 0.54 * w, 0.12 * h, 0.58 * w, 0.16 * h)
+        c2.cubicTo(0.62 * w, 0.13 * h, 0.68 * w, 0.15 * h, 0.70 * w, 0.19 * h)
+        c2.cubicTo(0.72 * w, 0.23 * h, 0.66 * w, 0.25 * h, 0.60 * w, 0.24 * h)
+        c2.cubicTo(0.52 * w, 0.25 * h, 0.46 * w, 0.23 * h, 0.44 * w, 0.18 * h)
+        c2.closeSubpath()
+        painter.drawPath(c2)
+
+        # Cloud 3: far left / lower horizon
+        c3 = QPainterPath()
+        c3.moveTo(0.0 * w, 0.24 * h)
+        c3.cubicTo(0.04 * w, 0.20 * h, 0.10 * w, 0.19 * h, 0.14 * w, 0.23 * h)
+        c3.cubicTo(0.18 * w, 0.21 * h, 0.22 * w, 0.23 * h, 0.24 * w, 0.27 * h)
+        c3.cubicTo(0.25 * w, 0.30 * h, 0.18 * w, 0.32 * h, 0.12 * w, 0.31 * h)
+        c3.cubicTo(0.06 * w, 0.32 * h, 0.0 * w, 0.30 * h, 0.0 * w, 0.24 * h)
+        c3.closeSubpath()
+        painter.drawPath(c3)
+
+        # ──── 2. Distant Tropical Island on the Horizon (y = 0.36 * h) ────
+        island_path = QPainterPath()
+        island_path.moveTo(0.52 * w, 0.38 * h)
+        island_path.cubicTo(0.58 * w, 0.36 * h, 0.64 * w, 0.32 * h, 0.68 * w, 0.31 * h)
+        island_path.cubicTo(0.72 * w, 0.31 * h, 0.75 * w, 0.34 * h, 0.78 * w, 0.33 * h)
+        island_path.cubicTo(0.82 * w, 0.32 * h, 0.85 * w, 0.36 * h, 0.88 * w, 0.38 * h)
+        island_path.lineTo(0.88 * w, 0.39 * h)
+        island_path.lineTo(0.52 * w, 0.39 * h)
+        island_path.closeSubpath()
+
+        island_grad = QLinearGradient(0.52 * w, 0.31 * h, 0.88 * w, 0.38 * h)
+        island_grad.setColorAt(0.0, QColor("#004D40"))
+        island_grad.setColorAt(1.0, QColor("#00695C"))
+        painter.setBrush(QBrush(island_grad))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawPath(island_path)
+
+        # ──── 3. Multi-Layered Turquoise Ocean & Diagonal Shoreline (y = 0.36 * h to 0.78 * h) ────
+        ocean_grad = QLinearGradient(0, 0.36 * h, 0, h)
+        ocean_grad.setColorAt(0.0, QColor("#005F73"))   # Deep ocean
+        ocean_grad.setColorAt(0.40, QColor("#0A9396"))  # Mid turquoise
+        ocean_grad.setColorAt(1.0, QColor("#94D2BD"))   # Shallow aqua
+        painter.fillRect(QRectF(0, 0.36 * h, w, 0.64 * h), ocean_grad)
+
+        # 10 subtle shimmering water sun-glints (rgba(255, 255, 255, 0.25)) between 0.38 * h and 0.55 * h
+        glint_color = QColor(255, 255, 255, 64)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(glint_color))
+        glints = [
+            (0.68 * w, 0.39 * h, 28, 2.5),
+            (0.74 * w, 0.41 * h, 36, 2.0),
+            (0.64 * w, 0.43 * h, 22, 2.0),
+            (0.71 * w, 0.44 * h, 42, 2.5),
+            (0.58 * w, 0.46 * h, 30, 2.0),
+            (0.77 * w, 0.47 * h, 25, 2.0),
+            (0.66 * w, 0.49 * h, 38, 2.2),
+            (0.52 * w, 0.51 * h, 20, 1.8),
+            (0.73 * w, 0.52 * h, 32, 2.0),
+            (0.62 * w, 0.54 * h, 26, 2.0),
+        ]
+        for gx, gy, gw, gh in glints:
+            painter.drawRoundedRect(QRectF(gx, gy, gw, gh), gh / 2.0, gh / 2.0)
+
+        # 3 sweeping diagonal S-curve wave layers running from (0, 0.62 * h) across to (w, 0.46 * h)
+        # Layer 1: Back wave crest (#48CAE4)
+        w1 = QPainterPath()
+        w1.moveTo(0, 0.60 * h)
+        w1.cubicTo(0.35 * w, 0.65 * h, 0.65 * w, 0.49 * h, w, 0.44 * h)
+        w1.lineTo(w, h)
+        w1.lineTo(0, h)
+        w1.closeSubpath()
+        painter.setBrush(QBrush(QColor("#48CAE4")))
+        painter.drawPath(w1)
+
+        # Layer 2: Shallow lagoon wave (#90E0EF)
+        w2 = QPainterPath()
+        w2.moveTo(0, 0.63 * h)
+        w2.cubicTo(0.38 * w, 0.68 * h, 0.68 * w, 0.52 * h, w, 0.47 * h)
+        w2.lineTo(w, h)
+        w2.lineTo(0, h)
+        w2.closeSubpath()
+        painter.setBrush(QBrush(QColor("#90E0EF")))
+        painter.drawPath(w2)
+
+        # Layer 3: Creamy white seafoam surf edge (pen thickness 4px + translucent fill rgba(255, 255, 255, 0.75))
+        w3 = QPainterPath()
+        w3.moveTo(0, 0.66 * h)
+        w3.cubicTo(0.36 * w, 0.70 * h, 0.66 * w, 0.54 * h, w, 0.49 * h)
+        w3.lineTo(w, h)
+        w3.lineTo(0, h)
+        w3.closeSubpath()
+        painter.setPen(QPen(QColor(255, 255, 255, 220), 4.0))
+        painter.setBrush(QBrush(QColor(255, 255, 255, 190)))
+        painter.drawPath(w3)
+
+        # ──── 4. Warm Golden Sand Beach, Palm Tree & Starfish (y = 0.46 * h to h) ────
+        sand_path = QPainterPath()
+        sand_path.moveTo(0, 0.68 * h)
+        sand_path.cubicTo(0.36 * w, 0.72 * h, 0.66 * w, 0.56 * h, w, 0.51 * h)
+        sand_path.lineTo(w, h)
+        sand_path.lineTo(0, h)
+        sand_path.closeSubpath()
+
+        sand_grad = QLinearGradient(0, 0.50 * h, 0, h)
+        sand_grad.setColorAt(0.0, QColor("#F6E2B3"))
+        sand_grad.setColorAt(0.50, QColor("#E6C280"))
+        sand_grad.setColorAt(1.0, QColor("#D4A373"))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(sand_grad))
+        painter.drawPath(sand_path)
+
+        # ──── Palm Tree Silhouette on Right Shore (around x = 0.68 * w) ────
+        # Soft diagonal shadow cast on the sand (rgba(93, 64, 55, 0.18))
+        shadow = QPainterPath()
+        shadow.moveTo(0.73 * w, 0.88 * h)
+        shadow.cubicTo(0.78 * w, 0.89 * h, 0.84 * w, 0.92 * h, 0.88 * w, 0.94 * h)
+        shadow.cubicTo(0.85 * w, 0.96 * h, 0.76 * w, 0.92 * h, 0.74 * w, 0.88 * h)
+        shadow.closeSubpath()
+        painter.setBrush(QBrush(QColor(93, 64, 55, 46)))
+        painter.drawPath(shadow)
+
+        # Gracefully curved brown coconut trunk (#5D4037 / #8D6E63)
+        # Rising from (0.74 * w, 0.88 * h) up to (0.66 * w, 0.22 * h)
+        trunk = QPainterPath()
+        trunk.moveTo(0.73 * w, 0.88 * h)
+        trunk.cubicTo(0.72 * w, 0.65 * h, 0.69 * w, 0.42 * h, 0.656 * w, 0.22 * h)
+        trunk.lineTo(0.664 * w, 0.22 * h)
+        trunk.cubicTo(0.70 * w, 0.42 * h, 0.735 * w, 0.65 * h, 0.75 * w, 0.88 * h)
+        trunk.closeSubpath()
+
+        trunk_grad = QLinearGradient(0.74 * w, 0.88 * h, 0.66 * w, 0.22 * h)
+        trunk_grad.setColorAt(0.0, QColor("#5D4037"))
+        trunk_grad.setColorAt(0.6, QColor("#6D4C41"))
+        trunk_grad.setColorAt(1.0, QColor("#8D6E63"))
+        painter.setBrush(QBrush(trunk_grad))
+        painter.drawPath(trunk)
+
+        # Coconut trunk rings / texture
+        painter.setPen(QPen(QColor(60, 40, 30, 80), 1.2))
+        for t in [0.35, 0.45, 0.55, 0.65, 0.75, 0.82]:
+            tx = (1 - t) * (0.74 * w) + t * (0.66 * w) - 2
+            ty = (1 - t) * (0.88 * h) + t * (0.22 * h)
+            tw = 12 * (1 - 0.4 * t)
+            painter.drawLine(QPointF(tx - tw / 2, ty), QPointF(tx + tw / 2, ty + 1))
+
+        # 3 Coconuts at crown (0.66 * w, 0.22 * h)
+        crown_x = 0.66 * w
+        crown_y = 0.22 * h
+        painter.setPen(QPen(QColor("#3E2723"), 1.0))
+        painter.setBrush(QBrush(QColor("#4E342E")))
+        painter.drawEllipse(QPointF(crown_x - 3.5, crown_y + 3), 4.5, 5.0)
+        painter.drawEllipse(QPointF(crown_x + 3.5, crown_y + 3), 4.5, 5.0)
+        painter.drawEllipse(QPointF(crown_x, crown_y + 6), 4.0, 4.5)
+
+        # 7 Lush arching palm fronds radiating from top of trunk in tropical greens
+        frond_colors = [
+            QColor("#1B5E20"), QColor("#2E7D32"), QColor("#388E3C"),
+            QColor("#43A047"), QColor("#2E7D32"), QColor("#1B5E20"), QColor("#388E3C")
+        ]
+        frond_curves = [
+            # (dx_ctrl, dy_ctrl, dx_tip, dy_tip) relative to crown
+            (-0.11 * w, -0.06 * h, -0.15 * w, -0.01 * h),   # 1. arch left-up
+            (-0.13 * w, -0.01 * h, -0.16 * w, 0.08 * h),    # 2. arch left-mid
+            (-0.09 * w, 0.06 * h, -0.12 * w, 0.16 * h),     # 3. arch left-down
+            (-0.02 * w, -0.10 * h, 0.0 * w, -0.12 * h),     # 4. arch straight up
+            (0.08 * w, -0.08 * h, 0.13 * w, -0.03 * h),     # 5. arch right-up
+            (0.12 * w, -0.02 * h, 0.15 * w, 0.07 * h),      # 6. arch right-mid
+            (0.09 * w, 0.06 * h, 0.11 * w, 0.15 * h),       # 7. arch right-down
+        ]
+
+        for idx, (fc, (cx_c, cy_c, tx_c, ty_c)) in enumerate(zip(frond_colors, frond_curves)):
+            tip_x = crown_x + tx_c
+            tip_y = crown_y + ty_c
+            ctrl_x = crown_x + cx_c
+            ctrl_y = crown_y + cy_c
+
+            blade = QPainterPath()
+            blade.moveTo(crown_x, crown_y)
+            blade.cubicTo(ctrl_x - 3, ctrl_y - 4, tip_x - 2, tip_y - 2, tip_x, tip_y)
+            blade.cubicTo(tip_x + 2, tip_y + 2, ctrl_x + 4, ctrl_y + 5, crown_x, crown_y)
+            blade.closeSubpath()
+
+            painter.setPen(QPen(fc.darker(120), 0.8))
+            painter.setBrush(QBrush(fc))
+            painter.drawPath(blade)
+
+            # Central vein stroke
+            painter.setPen(QPen(QColor(255, 255, 255, 70), 1.0))
+            painter.drawLine(QPointF(crown_x, crown_y), QPointF(tip_x, tip_y))
+
+        # ──── Foreground Starfish & Seashell (lower-right sand 0.62 * w, 0.85 * h) ────
+        star_cx = 0.62 * w
+        star_cy = 0.85 * h
+        star_r = 13.0
+        star_inner = 5.2
+
+        star_path = QPainterPath()
+        for i in range(10):
+            angle = -math.pi / 2.0 + i * (math.pi / 5.0)
+            rad = star_r if i % 2 == 0 else star_inner
+            px = star_cx + rad * math.cos(angle)
+            py = star_cy + rad * math.sin(angle)
+            if i == 0:
+                star_path.moveTo(px, py)
+            else:
+                star_path.lineTo(px, py)
+        star_path.closeSubpath()
+
+        painter.setPen(QPen(QColor("#C04B33"), 1.2))
+        painter.setBrush(QBrush(QColor("#E76F51")))
+        painter.drawPath(star_path)
+
+        # Starfish center dots
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(QColor("#FFF59D")))
+        painter.drawEllipse(QPointF(star_cx, star_cy), 2.2, 2.2)
+
+        # White seashell resting next to starfish (0.65 * w, 0.87 * h)
+        shell_cx = 0.65 * w
+        shell_cy = 0.87 * h
+        shell_path = QPainterPath()
+        shell_path.moveTo(shell_cx - 7, shell_cy + 4)
+        shell_path.cubicTo(shell_cx - 9, shell_cy - 6, shell_cx + 9, shell_cy - 6, shell_cx + 7, shell_cy + 4)
+        shell_path.cubicTo(shell_cx + 3, shell_cy + 7, shell_cx - 3, shell_cy + 7, shell_cx - 7, shell_cy + 4)
+        shell_path.closeSubpath()
+
+        shell_grad = QLinearGradient(shell_cx, shell_cy - 6, shell_cx, shell_cy + 6)
+        shell_grad.setColorAt(0.0, QColor("#FFFFFF"))
+        shell_grad.setColorAt(0.7, QColor("#FFF8EE"))
+        shell_grad.setColorAt(1.0, QColor("#EAD2AC"))
+        painter.setPen(QPen(QColor("#BCAAA4"), 1.0))
+        painter.setBrush(QBrush(shell_grad))
+        painter.drawPath(shell_path)
+
+        # Seashell ridges
+        painter.setPen(QPen(QColor("#D4AF37"), 0.8))
+        painter.drawLine(QPointF(shell_cx, shell_cy + 6), QPointF(shell_cx - 5, shell_cy - 3))
+        painter.drawLine(QPointF(shell_cx, shell_cy + 6), QPointF(shell_cx - 5, shell_cy - 5))
+        painter.drawLine(QPointF(shell_cx, shell_cy + 6), QPointF(shell_cx + 5, shell_cy - 3))
+
         painter.end()
 
 
