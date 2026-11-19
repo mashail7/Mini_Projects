@@ -10,7 +10,10 @@ import copy
 import math
 import chess
 
-from PySide6.QtCore import Qt, Signal, QSize, QByteArray, QRectF, QPointF, QThread
+from PySide6.QtCore import (
+    Qt, Signal, QSize, QByteArray, QRectF, QPointF, QThread,
+    QVariantAnimation, QEasingCurve, QTimer,
+)
 from PySide6.QtGui import (
     QPainter, QColor, QFont, QLinearGradient, QRadialGradient, QPen, QBrush,
     QIcon, QPainterPath, QConicalGradient,
@@ -68,6 +71,30 @@ DIFFICULTY_MAP = {
     "🌊 Tsunami": "Tsunami",
 }
 
+# ---------------------------------------------------------------------------
+# Timing and Animation Constants
+# ---------------------------------------------------------------------------
+MOVE_ANIM_DURATION_MS = 300       # Piece slide animation duration (250-350 ms)
+AI_PRE_MOVE_DELAY_MS = 800        # Presentation delay before AI starts moving (700-1000 ms)
+AI_POST_MOVE_PAUSE_MS = 400       # Visual pause after AI move finishes before player's turn (300-500 ms)
+
+
+# ---------------------------------------------------------------------------
+# PieceRendererCache — pre-loaded cache of QSvgRenderer for all 12 piece types
+# ---------------------------------------------------------------------------
+class PieceRendererCache:
+    """Lazily-cached QSvgRenderer instances for all 12 piece types to enable smooth 60 FPS animation."""
+    _renderers: dict[tuple[chess.Color, chess.PieceType], QSvgRenderer] = {}
+
+    @classmethod
+    def get(cls, color: chess.Color, piece_type: chess.PieceType) -> QSvgRenderer | None:
+        key = (color, piece_type)
+        if key not in cls._renderers:
+            svg_data = PIECE_SVGS.get(key)
+            if svg_data:
+                cls._renderers[key] = QSvgRenderer(QByteArray(svg_data.encode("utf-8")))
+        return cls._renderers.get(key)
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # AIWorker — background thread for engine search
@@ -119,10 +146,8 @@ class PromotionDialog(QDialog):
                 "  border-color: #E76F51;"
                 "}"
             )
-            svg_key = (color, piece_type)
-            svg_data = PIECE_SVGS.get(svg_key, "")
-            if svg_data:
-                renderer = QSvgRenderer(QByteArray(svg_data.encode("utf-8")))
+            renderer = PieceRendererCache.get(color, piece_type)
+            if renderer:
                 from PySide6.QtGui import QPixmap
                 pixmap = QPixmap(56, 56)
                 pixmap.fill(QColor(0, 0, 0, 0))
@@ -255,7 +280,7 @@ class EvalBar(QWidget):
 # ChessBoard — interactive board widget with 3D driftwood frame
 # ═══════════════════════════════════════════════════════════════════════════
 class ChessBoard(QWidget):
-    """Interactive chess board drawn with QPainter."""
+    """Interactive chess board drawn with QPainter with smooth piece slide animations."""
 
     move_made = Signal(object)
 
@@ -271,8 +296,109 @@ class ChessBoard(QWidget):
         self.setMinimumSize(480, 480)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
+        # Movement animation state
+        self.is_animating = False
+        self.anim_progress = 0.0
+        self.anim_moving_pieces: list[tuple[chess.Piece, int, int]] = []
+        self.anim_target_squares: set[int] = set()
+        self.anim_captured_info: tuple[chess.Piece, int] | None = None
+        self._anim_on_finished = None
+
+        self.move_anim = QVariantAnimation(self)
+        self.move_anim.setDuration(MOVE_ANIM_DURATION_MS)
+        self.move_anim.setStartValue(0.0)
+        self.move_anim.setEndValue(1.0)
+        self.move_anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
+        self.move_anim.valueChanged.connect(self._on_anim_value_changed)
+        self.move_anim.finished.connect(self._on_anim_finished)
+
     def sizeHint(self) -> QSize:
         return QSize(600, 600)
+
+    def _on_anim_value_changed(self, value):
+        self.anim_progress = float(value)
+        self.update()
+
+    def _on_anim_finished(self):
+        self.is_animating = False
+        self.anim_moving_pieces = []
+        self.anim_target_squares = set()
+        self.anim_captured_info = None
+        self.anim_progress = 1.0
+        self.update()
+        if self._anim_on_finished is not None:
+            cb = self._anim_on_finished
+            self._anim_on_finished = None
+            cb()
+
+    def reset_animation(self):
+        """Immediately stop any running animation and reset animation state."""
+        if self.move_anim.state() == QVariantAnimation.State.Running:
+            self.move_anim.stop()
+        self.is_animating = False
+        self.anim_moving_pieces = []
+        self.anim_target_squares = set()
+        self.anim_captured_info = None
+        self._anim_on_finished = None
+        self.anim_progress = 0.0
+        self.update()
+
+    def animate_and_push_move(self, move: chess.Move, on_finished=None):
+        """Prepare move animation details, push move to board, and start smooth animation."""
+        self.reset_animation()
+
+        moving_piece = self.board.piece_at(move.from_square)
+        if moving_piece is None:
+            self.board.push(move)
+            self.last_move = move
+            self.update()
+            if on_finished:
+                on_finished()
+            return
+
+        moving_pieces: list[tuple[chess.Piece, int, int]] = []
+        captured_info: tuple[chess.Piece, int] | None = None
+
+        if self.board.is_castling(move):
+            moving_pieces.append((moving_piece, move.from_square, move.to_square))
+            if self.board.is_kingside_castling(move):
+                r_from = chess.H1 if self.board.turn == chess.WHITE else chess.H8
+                r_to = chess.F1 if self.board.turn == chess.WHITE else chess.F8
+            else:
+                r_from = chess.A1 if self.board.turn == chess.WHITE else chess.A8
+                r_to = chess.D1 if self.board.turn == chess.WHITE else chess.D8
+            r_piece = self.board.piece_at(r_from)
+            if r_piece is not None:
+                moving_pieces.append((r_piece, r_from, r_to))
+        elif self.board.is_en_passant(move):
+            moving_pieces.append((moving_piece, move.from_square, move.to_square))
+            cap_sq = chess.square(chess.square_file(move.to_square), chess.square_rank(move.from_square))
+            cap_piece = self.board.piece_at(cap_sq)
+            if cap_piece is not None:
+                captured_info = (cap_piece, cap_sq)
+        elif self.board.is_capture(move):
+            moving_pieces.append((moving_piece, move.from_square, move.to_square))
+            cap_piece = self.board.piece_at(move.to_square)
+            if cap_piece is not None:
+                captured_info = (cap_piece, move.to_square)
+        else:
+            moving_pieces.append((moving_piece, move.from_square, move.to_square))
+
+        # Push to authoritative chess board
+        self.board.push(move)
+        self.last_move = move
+        self.selected_square = None
+        self.legal_moves_for_selected = []
+
+        # Configure animation
+        self.anim_moving_pieces = moving_pieces
+        self.anim_target_squares = {m[2] for m in moving_pieces}
+        self.anim_captured_info = captured_info
+        self._anim_on_finished = on_finished
+        self.is_animating = True
+        self.anim_progress = 0.0
+
+        self.move_anim.start()
 
     # ----- coordinate helpers -----
     def _geometry(self):
@@ -443,7 +569,7 @@ class ChessBoard(QWidget):
                 painter.drawRect(self._square_rect(sq))
 
         # ──── Selected square highlight: glowing golden-aqua ring ────
-        if self.selected_square is not None:
+        if not self.is_animating and self.selected_square is not None:
             sel_rect = self._square_rect(self.selected_square)
             # Golden fill
             sel_color = QColor(212, 175, 55, 80)
@@ -458,7 +584,7 @@ class ChessBoard(QWidget):
             painter.drawRect(sel_rect.adjusted(1.5, 1.5, -1.5, -1.5))
 
         # ──── Check highlight: pulsing crimson-coral radial glow ────
-        if self.board.is_check():
+        if not self.is_animating and self.board.is_check():
             king_sq = self.board.king(self.board.turn)
             if king_sq is not None:
                 kr = self._square_rect(king_sq)
@@ -477,24 +603,80 @@ class ChessBoard(QWidget):
                 painter.setBrush(Qt.BrushStyle.NoBrush)
                 painter.drawEllipse(center, ss * 0.44, ss * 0.44)
 
-        # ──── Pieces ────
+        # ──── Static Pieces ────
         for sq in chess.SQUARES:
+            # Skip drawing static piece if it's currently at an animation destination square
+            if self.is_animating and sq in self.anim_target_squares:
+                continue
+
             piece = self.board.piece_at(sq)
             if piece is None:
                 continue
-            svg_key = (piece.color, piece.piece_type)
-            svg_data = PIECE_SVGS.get(svg_key)
-            if svg_data is None:
+
+            renderer = PieceRendererCache.get(piece.color, piece.piece_type)
+            if renderer is None:
                 continue
-            renderer = QSvgRenderer(QByteArray(svg_data.encode("utf-8")))
+
             rect = self._square_rect(sq)
             # Slight padding so pieces don't touch the edges
             padding = ss * 0.06
             piece_rect = rect.adjusted(padding, padding, -padding, -padding)
             renderer.render(painter, piece_rect)
 
+        # ──── Captured Piece (dissolves into sea mist on impact) ────
+        if self.is_animating and self.anim_captured_info is not None:
+            cap_piece, cap_sq = self.anim_captured_info
+            if self.anim_progress < 0.65:
+                cap_opacity = 1.0
+            elif self.anim_progress < 0.88:
+                cap_opacity = max(0.0, (0.88 - self.anim_progress) / 0.23)
+            else:
+                cap_opacity = 0.0
+
+            if cap_opacity > 0.0:
+                renderer = PieceRendererCache.get(cap_piece.color, cap_piece.piece_type)
+                if renderer:
+                    cap_rect = self._square_rect(cap_sq)
+                    padding = ss * 0.06
+                    cap_piece_rect = cap_rect.adjusted(padding, padding, -padding, -padding)
+                    painter.save()
+                    painter.setOpacity(cap_opacity)
+                    renderer.render(painter, cap_piece_rect)
+                    painter.restore()
+
+        # ──── Animating Pieces (rendered smoothly on top with subtle marine breeze lift) ────
+        if self.is_animating and self.anim_moving_pieces:
+            for piece, from_sq, to_sq in self.anim_moving_pieces:
+                start_rect = self._square_rect(from_sq)
+                end_rect = self._square_rect(to_sq)
+
+                t = self.anim_progress
+                cur_x = start_rect.x() + (end_rect.x() - start_rect.x()) * t
+                cur_y = start_rect.y() + (end_rect.y() - start_rect.y()) * t
+                cur_w = start_rect.width() + (end_rect.width() - start_rect.width()) * t
+                cur_h = start_rect.height() + (end_rect.height() - start_rect.height()) * t
+                cur_rect = QRectF(cur_x, cur_y, cur_w, cur_h)
+
+                padding = ss * 0.06
+                piece_rect = cur_rect.adjusted(padding, padding, -padding, -padding)
+
+                # Marine lift shadow underneath flying piece
+                lift = 1.0 - abs(t - 0.5) * 0.6
+                shadow_offset = ss * 0.04 * lift
+                shadow_rect = piece_rect.translated(shadow_offset, shadow_offset * 1.2)
+                painter.save()
+                shadow_color = QColor(7, 26, 36, int(60 * lift))
+                painter.setBrush(QBrush(shadow_color))
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.drawEllipse(shadow_rect.center(), piece_rect.width() * 0.38, piece_rect.height() * 0.38)
+                painter.restore()
+
+                renderer = PieceRendererCache.get(piece.color, piece.piece_type)
+                if renderer:
+                    renderer.render(painter, piece_rect)
+
         # ──── Legal move indicators ────
-        if self.selected_square is not None:
+        if not self.is_animating and self.selected_square is not None:
             for move in self.legal_moves_for_selected:
                 target_rect = self._square_rect(move.to_square)
                 center = target_rect.center()
@@ -528,7 +710,7 @@ class ChessBoard(QWidget):
 
     # ----- interaction -----
     def mousePressEvent(self, event):
-        if not self.interactive:
+        if not self.interactive or self.is_animating:
             return
         if self.board.turn != self.player_color:
             return
@@ -570,7 +752,6 @@ class ChessBoard(QWidget):
                 self.selected_square = None
                 self.legal_moves_for_selected = []
                 self.move_made.emit(move)
-                self.update()
                 return
 
             # Clicked same square → deselect
@@ -913,6 +1094,20 @@ class AquaChessWindow(QMainWindow):
         self.ai_worker: AIWorker | None = None
         self.last_eval: int = 0
 
+        # AI pacing, synchronization, and animation state
+        self.is_busy: bool = False
+        self.ai_search_id: int = 0
+        self.pending_ai_move: tuple[chess.Move, int] | None = None
+        self.ai_delay_elapsed: bool = False
+
+        self.ai_delay_timer = QTimer(self)
+        self.ai_delay_timer.setSingleShot(True)
+        self.ai_delay_timer.timeout.connect(self._on_ai_delay_timeout)
+
+        self.ai_pause_timer = QTimer(self)
+        self.ai_pause_timer.setSingleShot(True)
+        self.ai_pause_timer.timeout.connect(self._on_ai_pause_timeout)
+
         # --- stylesheet ---
         self.setStyleSheet(STYLESHEET)
 
@@ -1035,69 +1230,171 @@ class AquaChessWindow(QMainWindow):
         # --- initial display ---
         self.update_display()
 
+    def set_busy_state(self, busy: bool):
+        """Update UI interaction state when busy animating or during AI turns."""
+        self.is_busy = busy
+        self.chess_board.interactive = not busy and (self.board.turn == self.player_color) and not self.board.is_game_over()
+        self.undo_btn.setEnabled(not busy and len(self.board.move_stack) > 0 and not self.board.is_game_over())
+        self.flip_btn.setEnabled(not busy)
+        self.color_combo.setEnabled(not busy)
+        self.difficulty_combo.setEnabled(not busy)
+        self.new_game_btn.setEnabled(True)
+
     # ------------------------------------------------------------------
     # Color change
     # ------------------------------------------------------------------
     def _on_color_changed(self, index: int):
+        if self.is_busy:
+            return
         self.player_color = chess.WHITE if index == 0 else chess.BLACK
         self.chess_board.player_color = self.player_color
         self.new_game()
 
     # ------------------------------------------------------------------
-    # Game actions
+    # Game actions and Animation / AI Orchestration
     # ------------------------------------------------------------------
     def on_player_move(self, move: chess.Move):
         """Called when the human makes a move on the board."""
-        self.board.push(move)
-        self.chess_board.last_move = move
-        self.chess_board.selected_square = None
-        self.chess_board.legal_moves_for_selected = []
-        self.update_display()
-
-        if self.check_game_over():
-            self.chess_board.interactive = False
+        if self.is_busy:
             return
 
-        self.trigger_ai_move()
+        self.set_busy_state(True)
 
-    def trigger_ai_move(self):
-        """Start the AI search in a background thread."""
-        if self.board.turn == self.player_color:
-            self.chess_board.interactive = True
-            return
-        if self.board.is_game_over():
-            self.chess_board.interactive = False
-            return
+        # Check whether this move concludes the game
+        board_copy = copy.deepcopy(self.board)
+        board_copy.push(move)
+        game_ends = board_copy.is_game_over()
 
-        self.chess_board.interactive = False
-        self.status_label.setText("AI is thinking in the waves... 🌊")
+        # If the game continues, start the AI calculation immediately in background thread
+        # (AI calculation runs at full speed without artificial throttling)
+        if not game_ends:
+            self._start_ai_search(board_copy)
+
+        # Smoothly animate the player's piece movement
+        self.chess_board.animate_and_push_move(
+            move,
+            on_finished=lambda: self._on_player_move_finished(game_ends)
+        )
+
+    def _start_ai_search(self, board_copy: chess.Board):
+        """Launch the engine search on a background thread."""
+        self.ai_search_id += 1
+        search_id = self.ai_search_id
+        self.pending_ai_move = None
+        self.ai_delay_elapsed = False
 
         difficulty_key = self.difficulty_combo.currentText()
         difficulty = DIFFICULTY_MAP.get(difficulty_key, "Beach Breeze")
 
-        board_copy = copy.deepcopy(self.board)
         self.ai_worker = AIWorker(board_copy, difficulty, self.engine, parent=self)
-        self.ai_worker.result_ready.connect(self.on_ai_move_ready)
+        self.ai_worker.result_ready.connect(
+            lambda move, score, s_id=search_id: self._on_ai_worker_ready(move, score, s_id)
+        )
         self.ai_worker.start()
 
-    def on_ai_move_ready(self, move: chess.Move, eval_score: int):
-        """Handle the AI's chosen move."""
-        if move is not None and move in self.board.legal_moves:
-            self.board.push(move)
-            self.chess_board.last_move = move
-            self.last_eval = eval_score
-            self.eval_bar.set_eval(eval_score)
+    def _on_player_move_finished(self, game_ends: bool):
+        """Called when player piece movement animation completes."""
+        self.update_move_history()
+        self.update_captured_pieces()
+        self.eval_bar.set_eval(self.engine.evaluate(self.board))
+
+        if self.check_game_over():
+            self.set_busy_state(False)
+            self.chess_board.interactive = False
+            return
+
+        # Player move landed cleanly; start AI presentation delay
+        self.status_label.setText("AI is thinking in the waves... 🌊")
+        self.ai_delay_timer.start(AI_PRE_MOVE_DELAY_MS)
+
+    def _on_ai_worker_ready(self, move: chess.Move, eval_score: int, search_id: int):
+        """Called when background AI calculation finishes."""
+        if search_id != self.ai_search_id:
+            return  # Discard stale result from cancelled search
+
+        self.pending_ai_move = (move, eval_score)
+
+        # If the presentation delay timer already elapsed, execute the AI move now
+        if self.ai_delay_elapsed:
+            self._execute_ai_move()
+
+    def _on_ai_delay_timeout(self):
+        """Called when the AI pre-move thinking delay finishes."""
+        self.ai_delay_elapsed = True
+
+        # If the AI calculation is already done, execute the move now
+        if self.pending_ai_move is not None:
+            self._execute_ai_move()
+        else:
+            # AI is still calculating (higher difficulty / deep search)
+            self.status_label.setText("AI is pondering deeply... 🌊")
+
+    def _execute_ai_move(self):
+        """Trigger the AI's move animation and presentation."""
+        if self.pending_ai_move is None:
+            return
+
+        move, eval_score = self.pending_ai_move
+        self.pending_ai_move = None
         self.ai_worker = None
-        self.chess_board.interactive = not self.board.is_game_over()
-        self.update_display()
-        self.check_game_over()
+
+        if move is None or move not in self.board.legal_moves:
+            self.set_busy_state(False)
+            self.update_display()
+            self.check_game_over()
+            return
+
+        # Record SAN before pushing the move
+        san = self.board.san(move)
+        self.last_eval = eval_score
+        self.eval_bar.set_eval(eval_score)
+        self.status_label.setText(f"AI plays {san} 🌊")
+
+        # Smoothly animate AI piece movement
+        self.chess_board.animate_and_push_move(
+            move,
+            on_finished=lambda: self._on_ai_move_finished(san)
+        )
+
+    def _on_ai_move_finished(self, san: str):
+        """Called when AI move animation finishes."""
+        self.update_move_history()
+        self.update_captured_pieces()
+
+        if self.check_game_over():
+            self.set_busy_state(False)
+            self.chess_board.interactive = False
+            return
+
+        # Brief visual pause so the player clearly registers the AI's move
+        self.status_label.setText(f"AI played {san} 🌊")
+        self.ai_pause_timer.start(AI_POST_MOVE_PAUSE_MS)
+
+    def _on_ai_pause_timeout(self):
+        """Called when post-move pause finishes; restores player control."""
+        if self.check_game_over():
+            self.set_busy_state(False)
+            self.chess_board.interactive = False
+            return
+
+        self.set_busy_state(False)
+        self._update_status()
 
     def new_game(self):
         """Reset everything for a fresh game."""
+        # Cancel any pending AI operations and timers
+        self.ai_search_id += 1
+        self.ai_delay_timer.stop()
+        self.ai_pause_timer.stop()
+        self.pending_ai_move = None
+        self.ai_delay_elapsed = False
+
         if self.ai_worker is not None and self.ai_worker.isRunning():
             self.ai_worker.terminate()
             self.ai_worker.wait(500)
             self.ai_worker = None
+
+        self.chess_board.reset_animation()
 
         self.board.reset()
         self.engine.reset()
@@ -1108,25 +1405,32 @@ class AquaChessWindow(QMainWindow):
         self.chess_board.legal_moves_for_selected = []
         self.last_eval = 0
         self.eval_bar.set_eval(0)
-        self.chess_board.interactive = (self.player_color == chess.WHITE)
-        self.update_display()
 
-        # If the player chose Black, AI moves first
         if self.player_color == chess.BLACK:
             self.chess_board.flipped = True
-            self.trigger_ai_move()
+            self.set_busy_state(True)
+            self.status_label.setText("AI is thinking in the waves... 🌊")
+            self.update_display()
+            # Start AI calculation as White for the opening move
+            board_copy = copy.deepcopy(self.board)
+            self._start_ai_search(board_copy)
+            self.ai_delay_timer.start(AI_PRE_MOVE_DELAY_MS)
         else:
             self.chess_board.flipped = False
+            self.set_busy_state(False)
+            self.update_display()
 
     def undo_move(self):
         """Undo moves back to the player's turn."""
-        if self.ai_worker is not None and self.ai_worker.isRunning():
-            return  # don't undo while AI is thinking
+        if self.is_busy:
+            return
 
         if not self.board.move_stack:
             return
 
-        # If it's the AI's turn (e.g. human just moved, game over or AI didn't run), pop 1 move
+        self.chess_board.reset_animation()
+
+        # If it's the AI's turn (e.g. human moved and AI has not responded yet), pop 1 move
         if self.board.turn != self.player_color:
             self.board.pop()
         else:
@@ -1147,11 +1451,13 @@ class AquaChessWindow(QMainWindow):
 
         self.chess_board.selected_square = None
         self.chess_board.legal_moves_for_selected = []
-        self.chess_board.interactive = True
+        self.set_busy_state(False)
         self.update_display()
 
     def flip_board(self):
         """Toggle board orientation."""
+        if self.is_busy:
+            return
         self.chess_board.flipped = not self.chess_board.flipped
         self.chess_board.update()
 
@@ -1164,8 +1470,9 @@ class AquaChessWindow(QMainWindow):
         self.update_move_history()
         self.update_captured_pieces()
         self._update_status()
-        if self.ai_worker is None or not self.ai_worker.isRunning():
+        if not self.is_busy:
             self.eval_bar.set_eval(self.engine.evaluate(self.board))
+        self.set_busy_state(self.is_busy)
 
     def _update_status(self):
         """Set the status label based on current game state."""
@@ -1174,19 +1481,25 @@ class AquaChessWindow(QMainWindow):
 
         if self.board.turn == self.player_color:
             color_name = "White" if self.board.turn == chess.WHITE else "Black"
-            self.status_label.setText(f"Your Turn — {color_name} to Move")
+            if self.board.is_check():
+                self.status_label.setText(f"Your Turn — {color_name} in Check! ⚠️")
+            else:
+                self.status_label.setText(f"Your Turn — {color_name} to Move")
         else:
             self.status_label.setText("AI is thinking in the waves... 🌊")
 
     def update_move_history(self):
         """Parse board.move_stack into SAN pairs and fill the table."""
-        # We need to replay moves on a temporary board to get correct SAN
-        temp_board = chess.Board()
+        # Replay moves from the board root position to get correct SAN notation
+        temp_board = self.board.root()
         san_moves: list[str] = []
         for move in self.board.move_stack:
-            san = temp_board.san(move)
+            try:
+                san = temp_board.san(move)
+                temp_board.push(move)
+            except Exception:
+                san = move.uci()
             san_moves.append(san)
-            temp_board.push(move)
 
         num_rows = (len(san_moves) + 1) // 2
         self.move_table.setRowCount(num_rows)
