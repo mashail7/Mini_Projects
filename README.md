@@ -1,5 +1,10 @@
 # Mini Projects
 
+![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat&logo=python&logoColor=white)
+![PySide6](https://img.shields.io/badge/GUI-PySide6%20%2F%20Desktop-41CD52?style=flat&logo=qt&logoColor=white)
+![Git](https://img.shields.io/badge/Git-Version%20Control-F05032?style=flat&logo=git&logoColor=white)
+![Portfolio](https://img.shields.io/badge/GitHub-Portfolio-181717?style=flat&logo=github&logoColor=white)
+
 A collection of personal programming projects, experiments, and ideas developed while learning and exploring software development.
 
 ## Projects
