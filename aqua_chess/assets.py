@@ -536,6 +536,14 @@ QLabel#statusLabel {
     padding: 8px 10px;
     min-height: 22px;
 }
+QLabel#bannerStatusLabel {
+    font-size: 17pt;
+    font-weight: bold;
+    color: #FFFDF9;
+    background: transparent;
+    border: none;
+    padding: 0;
+}
 QLabel#sectionLabel {
     font-size: 11px;
     font-weight: bold;

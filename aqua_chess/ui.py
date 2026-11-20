@@ -11,17 +11,17 @@ import math
 import chess
 
 from PySide6.QtCore import (
-    Qt, Signal, QSize, QByteArray, QRectF, QPointF, QThread,
+    Qt, Signal, QSize, QByteArray, QRectF, QRect, QPointF, QPoint, QThread,
     QVariantAnimation, QEasingCurve, QTimer,
 )
 from PySide6.QtGui import (
     QPainter, QColor, QFont, QLinearGradient, QRadialGradient, QPen, QBrush,
-    QIcon, QPainterPath, QConicalGradient,
+    QIcon, QPainterPath, QConicalGradient, QPixmap,
 )
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
     QComboBox, QLabel, QTableWidget, QTableWidgetItem, QDialog,
-    QSizePolicy, QHeaderView, QAbstractItemView,
+    QSizePolicy, QHeaderView, QAbstractItemView, QFrame,
 )
 from PySide6.QtSvg import QSvgRenderer
 
@@ -75,7 +75,8 @@ DIFFICULTY_MAP = {
 # Timing and Animation Constants
 # ---------------------------------------------------------------------------
 MOVE_ANIM_DURATION_MS = 300       # Piece slide animation duration (250-350 ms)
-AI_PRE_MOVE_DELAY_MS = 800        # Presentation delay before AI starts moving (700-1000 ms)
+AI_TURN_DELAY_MS = 500            # Non-blocking pause after player move finishes before AI moves (500 ms)
+AI_PRE_MOVE_DELAY_MS = 500        # Presentation delay before AI starts moving (500 ms)
 AI_POST_MOVE_PAUSE_MS = 400       # Visual pause after AI move finishes before player's turn (300-500 ms)
 
 
@@ -94,6 +95,36 @@ class PieceRendererCache:
             if svg_data:
                 cls._renderers[key] = QSvgRenderer(QByteArray(svg_data.encode("utf-8")))
         return cls._renderers.get(key)
+
+
+# ---------------------------------------------------------------------------
+# PiecePixmapCache — pre-rendered HiDPI QPixmap cache for smooth 60+ FPS blits
+# ---------------------------------------------------------------------------
+class PiecePixmapCache:
+    """Pre-rendered HiDPI QPixmap cache for all 12 piece types at specific square sizes."""
+    _pixmaps: dict[tuple[chess.Color, chess.PieceType, int, float], QPixmap] = {}
+
+    @classmethod
+    def get(cls, color: chess.Color, piece_type: chess.PieceType, size: int, dpr: float = 1.0) -> QPixmap | None:
+        key = (color, piece_type, size, dpr)
+        if key not in cls._pixmaps:
+            renderer = PieceRendererCache.get(color, piece_type)
+            if renderer is None or size <= 0:
+                return None
+            phys_size = max(1, int(round(size * dpr)))
+            pix = QPixmap(phys_size, phys_size)
+            pix.setDevicePixelRatio(dpr)
+            pix.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(pix)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            renderer.render(painter, QRectF(0, 0, size, size))
+            painter.end()
+            cls._pixmaps[key] = pix
+        return cls._pixmaps.get(key)
+
+    @classmethod
+    def clear(cls):
+        cls._pixmaps.clear()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -277,17 +308,282 @@ class EvalBar(QWidget):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# GameOverOverlay — large, high-impact victory and end-of-game announcement
+# ═══════════════════════════════════════════════════════════════════════════
+class GameOverOverlay(QWidget):
+    """
+    Bold, high-impact victory and game-over announcement overlay.
+    Floats centered over the chessboard with a semi-transparent oceanic glass veil.
+    Provides prominent victory typography (28pt-32pt), ocean-themed gold/coral/seafoam styling,
+    a clear "Play Again" button, and an "Inspect Board" mode to study the final state.
+    """
+    play_again_clicked = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.is_inspect_mode = False
+        self.winner: chess.Color | None = None
+        self.title_text: str = ""
+        self.subtitle_text: str = ""
+        self.is_draw: bool = False
+
+        # Main layout
+        self.main_layout = QVBoxLayout(self)
+        self.main_layout.setContentsMargins(16, 16, 16, 16)
+        self.main_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        # --- Centered Floating Victory Card ---
+        self.card = QFrame(self)
+        self.card.setObjectName("gameOverCard")
+        self.card.setMinimumWidth(340)
+        self.card.setMaximumWidth(460)
+        card_layout = QVBoxLayout(self.card)
+        card_layout.setContentsMargins(30, 24, 30, 24)
+        card_layout.setSpacing(10)
+        card_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        # Trophy / Medallion Emblem
+        self.emblem_label = QLabel(self.card)
+        self.emblem_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.emblem_label.setFont(QFont("Segoe UI", 36))
+        card_layout.addWidget(self.emblem_label)
+
+        # Grand Winner Headline (28pt-32pt Bold)
+        self.title_label = QLabel("WHITE WINS!", self.card)
+        self.title_label.setObjectName("gameOverTitle")
+        title_font = QFont("Segoe UI", 28, QFont.Weight.Bold)
+        self.title_label.setFont(title_font)
+        self.title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        card_layout.addWidget(self.title_label)
+
+        # Termination Subtitle (15pt-16pt DemiBold)
+        self.subtitle_label = QLabel("— Checkmate —", self.card)
+        self.subtitle_label.setObjectName("gameOverSubtitle")
+        sub_font = QFont("Segoe UI", 15, QFont.Weight.DemiBold)
+        self.subtitle_label.setFont(sub_font)
+        self.subtitle_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        card_layout.addWidget(self.subtitle_label)
+
+        # Decorative Nautical Divider
+        self.divider_label = QLabel("― 🐚 ―", self.card)
+        self.divider_label.setObjectName("gameOverDivider")
+        self.divider_label.setFont(QFont("Segoe UI", 12))
+        self.divider_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        card_layout.addWidget(self.divider_label)
+
+        # Action Buttons Layout
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(12)
+        btn_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.play_again_btn = QPushButton("🌊 Play Again", self.card)
+        self.play_again_btn.setObjectName("gameOverPlayAgainBtn")
+        self.play_again_btn.setFixedHeight(44)
+        self.play_again_btn.setMinimumWidth(160)
+        self.play_again_btn.setFont(QFont("Segoe UI", 13, QFont.Weight.Bold))
+        self.play_again_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.play_again_btn.clicked.connect(self._on_play_again)
+        btn_layout.addWidget(self.play_again_btn)
+
+        self.inspect_btn = QPushButton("🔍 Inspect Board", self.card)
+        self.inspect_btn.setObjectName("gameOverInspectBtn")
+        self.inspect_btn.setFixedHeight(44)
+        self.inspect_btn.setMinimumWidth(140)
+        self.inspect_btn.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
+        self.inspect_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.inspect_btn.clicked.connect(self.toggle_inspect_mode)
+        btn_layout.addWidget(self.inspect_btn)
+
+        card_layout.addLayout(btn_layout)
+        self.main_layout.addWidget(self.card, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        # --- Pinned Inspect Banner (only visible in inspect mode) ---
+        self.inspect_pill = QFrame(self)
+        self.inspect_pill.setObjectName("inspectPill")
+        self.inspect_pill.setFixedHeight(40)
+        pill_layout = QHBoxLayout(self.inspect_pill)
+        pill_layout.setContentsMargins(14, 4, 14, 4)
+        pill_layout.setSpacing(10)
+        pill_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.pill_summary_label = QLabel(self.inspect_pill)
+        self.pill_summary_label.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
+        self.pill_summary_label.setStyleSheet("color: #FFFDF9; background: transparent;")
+        pill_layout.addWidget(self.pill_summary_label)
+
+        self.pill_show_card_btn = QPushButton("📊 Show Result", self.inspect_pill)
+        self.pill_show_card_btn.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+        self.pill_show_card_btn.setFixedHeight(28)
+        self.pill_show_card_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.pill_show_card_btn.setStyleSheet(
+            "background: rgba(128, 255, 219, 0.20); color: #80FFDB; "
+            "border: 1px solid rgba(128, 255, 219, 0.50); border-radius: 6px; padding: 2px 10px;"
+        )
+        self.pill_show_card_btn.clicked.connect(self.toggle_inspect_mode)
+        pill_layout.addWidget(self.pill_show_card_btn)
+
+        self.pill_play_again_btn = QPushButton("🌊 Play Again", self.inspect_pill)
+        self.pill_play_again_btn.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+        self.pill_play_again_btn.setFixedHeight(28)
+        self.pill_play_again_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.pill_play_again_btn.setStyleSheet(
+            "background: #E76F51; color: #FFFFFF; border: none; border-radius: 6px; padding: 2px 10px;"
+        )
+        self.pill_play_again_btn.clicked.connect(self._on_play_again)
+        pill_layout.addWidget(self.pill_play_again_btn)
+
+        self.inspect_pill.hide()
+
+        self._apply_card_styles()
+        self.hide()
+
+    def update_geometry(self):
+        """Update size and position relative to parent chessboard."""
+        if not self.parent():
+            return
+        p_w = self.parent().width()
+        p_h = self.parent().height()
+        if self.is_inspect_mode:
+            pill_w = min(460, p_w - 20)
+            self.setGeometry(int((p_w - pill_w) / 2), 6, pill_w, 42)
+        else:
+            self.setGeometry(0, 0, p_w, p_h)
+
+    def show_game_over(self, winner: chess.Color | None, title: str, subtitle: str, is_draw: bool = False):
+        self.winner = winner
+        self.title_text = title
+        self.subtitle_text = subtitle
+        self.is_draw = is_draw
+        self.is_inspect_mode = False
+
+        self.title_label.setText(title)
+        self.subtitle_label.setText(f"— {subtitle} —")
+        self.pill_summary_label.setText(f"🏆 {title} ({subtitle})")
+
+        if is_draw:
+            self.emblem_label.setText("🌊")
+        elif winner == chess.WHITE:
+            self.emblem_label.setText("👑")
+        else:
+            self.emblem_label.setText("🏆")
+
+        self._apply_card_styles()
+        self.card.show()
+        self.inspect_pill.hide()
+        self.update_geometry()
+        self.show()
+        self.raise_()
+
+    def toggle_inspect_mode(self):
+        self.is_inspect_mode = not self.is_inspect_mode
+        self.update_geometry()
+        if self.is_inspect_mode:
+            self.card.hide()
+            self.inspect_pill.show()
+        else:
+            self.card.show()
+            self.inspect_pill.hide()
+        self.update()
+
+    def _on_play_again(self):
+        self.hide()
+        self.play_again_clicked.emit()
+
+    def _apply_card_styles(self):
+        if self.is_draw:
+            border_color = "#80FFDB"
+            title_color = "#80FFDB"
+            subtitle_color = "#A8DADC"
+            divider_color = "#2A9D8F"
+        elif self.winner == chess.WHITE:
+            border_color = "#D4AF37"
+            title_color = "#FFD166"
+            subtitle_color = "#F3E5AB"
+            divider_color = "#D4AF37"
+        else:
+            border_color = "#E76F51"
+            title_color = "#80FFDB"
+            subtitle_color = "#F4A261"
+            divider_color = "#E76F51"
+
+        self.card.setStyleSheet(
+            f"QFrame#gameOverCard {{"
+            f"  background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 rgba(10,38,54,0.96), stop:1 rgba(6,20,28,0.98));"
+            f"  border: 2.5px solid {border_color};"
+            f"  border-radius: 18px;"
+            f"}}"
+        )
+        self.title_label.setStyleSheet(
+            f"color: {title_color}; font-family: 'Segoe UI', sans-serif; font-size: 30pt; letter-spacing: 1.5px; font-weight: bold; background: transparent;"
+        )
+        self.subtitle_label.setStyleSheet(
+            f"color: {subtitle_color}; font-family: 'Segoe UI', sans-serif; font-size: 16pt; font-weight: 600; letter-spacing: 1px; background: transparent;"
+        )
+        self.divider_label.setStyleSheet(
+            f"color: {divider_color}; background: transparent;"
+        )
+        self.play_again_btn.setStyleSheet(
+            "QPushButton#gameOverPlayAgainBtn {"
+            "  background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #E76F51, stop:1 #C04B33);"
+            "  color: #FFFFFF;"
+            "  border: 1.5px solid rgba(255, 255, 255, 0.40);"
+            "  border-radius: 10px;"
+            "  padding: 8px 18px;"
+            "}"
+            "QPushButton#gameOverPlayAgainBtn:hover {"
+            "  background: #F4A261;"
+            "  border-color: #FFFDF9;"
+            "}"
+            "QPushButton#gameOverPlayAgainBtn:pressed {"
+            "  background: #9E3820;"
+            "}"
+        )
+        self.inspect_btn.setStyleSheet(
+            "QPushButton#gameOverInspectBtn {"
+            "  background: rgba(128, 255, 219, 0.12);"
+            "  color: #80FFDB;"
+            "  border: 1.5px solid rgba(128, 255, 219, 0.45);"
+            "  border-radius: 10px;"
+            "  padding: 8px 14px;"
+            "}"
+            "QPushButton#gameOverInspectBtn:hover {"
+            "  background: rgba(128, 255, 219, 0.25);"
+            "  border-color: #80FFDB;"
+            "  color: #FFFFFF;"
+            "}"
+        )
+        self.inspect_pill.setStyleSheet(
+            f"QFrame#inspectPill {{"
+            f"  background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 rgba(7,26,36,0.92), stop:1 rgba(13,44,62,0.95));"
+            f"  border: 1.5px solid {border_color};"
+            f"  border-radius: 12px;"
+            f"}}"
+        )
+
+    def paintEvent(self, event):
+        pass
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # ChessBoard — interactive board widget with 3D driftwood frame
 # ═══════════════════════════════════════════════════════════════════════════
 class ChessBoard(QWidget):
-    """Interactive chess board drawn with QPainter with smooth piece slide animations."""
+    """Interactive chess board drawn with QPainter with smooth piece slide animations and drag-and-drop.
+    Features:
+    - Pre-rendered static driftwood frame and 64 tiles in HiDPI QPixmap cache (zero per-frame vector math).
+    - Pre-rendered piece pixmaps via HiDPI PiecePixmapCache (fast sub-millisecond blits).
+    - Dirty-rect updates (update(rect)) during piece dragging and move animations.
+    - Zero per-frame allocations in paintEvent and mouseMoveEvent.
+    """
 
     move_made = Signal(object)
 
     def __init__(self, board: chess.Board, parent=None):
         super().__init__(parent)
         self.board = board
-        self.flipped = False
+        self._flipped = False
         self.selected_square: int | None = None
         self.legal_moves_for_selected: list[chess.Move] = []
         self.last_move: chess.Move | None = None
@@ -295,6 +591,29 @@ class ChessBoard(QWidget):
         self.player_color: chess.Color = chess.WHITE
         self.setMinimumSize(480, 480)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.setMouseTracking(True)
+
+        # Dragging state
+        self.is_dragging: bool = False
+        self.drag_piece: chess.Piece | None = None
+        self.drag_start_sq: int | None = None
+        self.drag_pos: QPointF | None = None
+        self.drag_prev_rect: QRectF | None = None
+        self.hover_square: int | None = None
+
+        # Precomputed caches
+        self._static_board_cache: QPixmap | None = None
+        self._square_rects: dict[int, QRectF] = {}
+        self._square_rects_aligned: dict[int, QRect] = {}
+        self._square_centers: dict[int, QPointF] = {}
+        self._sq_size: float = 0.0
+        self._piece_size: int = 0
+        self._piece_padding: float = 0.0
+        self._geometry_cache: tuple[float, float, float, float, float, float, float] = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+        self._cached_pens_brushes: dict = {}
+
+        # Game-over victory overlay
+        self.game_over_overlay = GameOverOverlay(self)
 
         # Movement animation state
         self.is_animating = False
@@ -312,11 +631,54 @@ class ChessBoard(QWidget):
         self.move_anim.valueChanged.connect(self._on_anim_value_changed)
         self.move_anim.finished.connect(self._on_anim_finished)
 
+    @property
+    def flipped(self) -> bool:
+        return self._flipped
+
+    @flipped.setter
+    def flipped(self, val: bool):
+        val_bool = bool(val)
+        if self._flipped != val_bool:
+            self._flipped = val_bool
+            self._recompute_geometry()
+            self._render_static_board()
+
     def sizeHint(self) -> QSize:
         return QSize(600, 600)
 
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._recompute_geometry()
+        self._render_static_board()
+        if hasattr(self, "game_over_overlay") and self.game_over_overlay is not None:
+            self.game_over_overlay.update_geometry()
+
+    def show_game_over(self, winner: chess.Color | None, title: str, subtitle: str, is_draw: bool = False):
+        if hasattr(self, "game_over_overlay") and self.game_over_overlay is not None:
+            self.game_over_overlay.show_game_over(winner, title, subtitle, is_draw)
+
+    def hide_game_over(self):
+        if hasattr(self, "game_over_overlay") and self.game_over_overlay is not None:
+            self.game_over_overlay.is_inspect_mode = False
+            self.game_over_overlay.hide()
+
     def _on_anim_value_changed(self, value):
         self.anim_progress = float(value)
+        # Dirty-rect repaint covering only the moving piece flight corridor
+        if self.anim_moving_pieces:
+            corridor = QRectF()
+            for _, from_sq, to_sq in self.anim_moving_pieces:
+                rf = self._square_rects.get(from_sq)
+                rt = self._square_rects.get(to_sq)
+                if rf and rt:
+                    corridor = corridor.united(rf).united(rt)
+            if self.anim_captured_info:
+                rc = self._square_rects.get(self.anim_captured_info[1])
+                if rc:
+                    corridor = corridor.united(rc)
+            if not corridor.isEmpty():
+                self.update(corridor.adjusted(-20, -20, 20, 20).toAlignedRect())
+                return
         self.update()
 
     def _on_anim_finished(self):
@@ -400,7 +762,7 @@ class ChessBoard(QWidget):
 
         self.move_anim.start()
 
-    # ----- coordinate helpers -----
+    # ----- coordinate & geometry helpers -----
     def _geometry(self):
         board_total = min(self.width(), self.height()) - 16.0
         origin_x = (self.width() - board_total) / 2.0
@@ -412,21 +774,14 @@ class ChessBoard(QWidget):
         return board_total, origin_x, origin_y, margin, sq_size, grid_x, grid_y
 
     def _square_rect(self, sq: int) -> QRectF:
-        board_total, origin_x, origin_y, margin, sq_size, grid_x, grid_y = self._geometry()
-        file = chess.square_file(sq)
-        rank = chess.square_rank(sq)
-        if self.flipped:
-            col = 7 - file
-            row = rank
-        else:
-            col = file
-            row = 7 - rank
-        x = grid_x + col * sq_size
-        y = grid_y + row * sq_size
-        return QRectF(x, y, sq_size, sq_size)
+        if sq not in self._square_rects:
+            self._recompute_geometry()
+        return self._square_rects.get(sq, QRectF())
 
     def _pos_to_square(self, pos) -> int | None:
-        board_total, origin_x, origin_y, margin, sq_size, grid_x, grid_y = self._geometry()
+        if not self._geometry_cache or self._geometry_cache[0] <= 0:
+            self._recompute_geometry()
+        board_total, origin_x, origin_y, margin, sq_size, grid_x, grid_y = self._geometry_cache
         x = pos.x() - grid_x
         y = pos.y() - grid_y
         if x < 0 or y < 0:
@@ -435,7 +790,7 @@ class ChessBoard(QWidget):
         row = int(y / sq_size)
         if col < 0 or col > 7 or row < 0 or row > 7:
             return None
-        if self.flipped:
+        if self._flipped:
             file = 7 - col
             rank = row
         else:
@@ -443,13 +798,76 @@ class ChessBoard(QWidget):
             rank = 7 - row
         return chess.square(file, rank)
 
-    # ----- painting -----
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setClipping(False)
+    def _recompute_geometry(self):
+        """Precompute all square coordinates, centers, pens, and brushes to ensure zero per-frame allocations."""
+        geom = self._geometry()
+        self._geometry_cache = geom
+        board_total, origin_x, origin_y, margin, sq_size, grid_x, grid_y = geom
 
-        board_total, origin_x, origin_y, margin, sq_size, grid_x, grid_y = self._geometry()
+        if board_total <= 0 or sq_size <= 0:
+            return
+
+        self._sq_size = sq_size
+        self._piece_padding = sq_size * 0.06
+        self._piece_size = max(1, int(round(sq_size - 2.0 * self._piece_padding)))
+
+        self._square_rects.clear()
+        self._square_rects_aligned.clear()
+        self._square_centers.clear()
+
+        for sq in chess.SQUARES:
+            file = chess.square_file(sq)
+            rank = chess.square_rank(sq)
+            if self._flipped:
+                col = 7 - file
+                row = rank
+            else:
+                col = file
+                row = 7 - rank
+            x = grid_x + col * sq_size
+            y = grid_y + row * sq_size
+            rf = QRectF(x, y, sq_size, sq_size)
+            self._square_rects[sq] = rf
+            self._square_rects_aligned[sq] = rf.toAlignedRect()
+            self._square_centers[sq] = rf.center()
+
+        ss = sq_size
+        self._cached_pens_brushes = {
+            "last_move_brush": QBrush(QColor(244, 162, 97, 115)),
+            "sel_brush": QBrush(QColor(212, 175, 55, 80)),
+            "sel_ring_pen": QPen(QColor("#D4AF37"), max(2.0, ss * 0.06)),
+            "cap_target_pen": QPen(QColor("#E76F51"), max(2.5, ss * 0.07)),
+            "cap_target_brush": QBrush(QColor(231, 111, 81, 35)),
+            "cap_inner_pen": QPen(QColor(244, 162, 97, 120), max(1.0, ss * 0.03)),
+            "drop_outer_pen": QPen(QColor(128, 255, 219, 80), max(1.0, ss * 0.025)),
+            "check_ring_pen": QPen(QColor(230, 57, 70, 160), max(1.5, ss * 0.04)),
+            "hover_pen": QPen(QColor("#4DD0E1"), max(2.0, ss * 0.05)),
+        }
+
+        # Warm up piece pixmap cache for current scale and DPR
+        dpr = self.devicePixelRatio()
+        for color in (chess.WHITE, chess.BLACK):
+            for pt in (chess.PAWN, chess.KNIGHT, chess.BISHOP, chess.ROOK, chess.QUEEN, chess.KING):
+                PiecePixmapCache.get(color, pt, self._piece_size, dpr)
+
+    def _render_static_board(self):
+        """Pre-render static driftwood frame, wood grain, coordinates, and 64 tiles into a cached QPixmap."""
+        w_int = self.width()
+        h_int = self.height()
+        if w_int <= 0 or h_int <= 0:
+            return
+
+        dpr = self.devicePixelRatio()
+        phys_w = max(1, int(round(w_int * dpr)))
+        phys_h = max(1, int(round(h_int * dpr)))
+        pix = QPixmap(phys_w, phys_h)
+        pix.setDevicePixelRatio(dpr)
+        pix.fill(Qt.GlobalColor.transparent)
+
+        painter = QPainter(pix)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        board_total, origin_x, origin_y, margin, sq_size, grid_x, grid_y = self._geometry_cache
         ss = sq_size
 
         # ──── 3D Driftwood & Brass Frame ────
@@ -499,7 +917,7 @@ class ChessBoard(QWidget):
         painter.setPen(coord_color)
 
         for col in range(8):
-            file_idx = (7 - col) if self.flipped else col
+            file_idx = (7 - col) if self._flipped else col
             file_label = chr(ord("a") + file_idx)
             # Top
             top_rect = QRectF(grid_x + col * sq_size, origin_y, sq_size, margin)
@@ -509,7 +927,7 @@ class ChessBoard(QWidget):
             painter.drawText(bottom_rect, Qt.AlignmentFlag.AlignCenter, file_label)
 
         for row in range(8):
-            rank_idx = row if self.flipped else (7 - row)
+            rank_idx = row if self._flipped else (7 - row)
             rank_label = str(rank_idx + 1)
             # Left
             left_rect = QRectF(origin_x, grid_y + row * sq_size, margin, sq_size)
@@ -520,19 +938,19 @@ class ChessBoard(QWidget):
 
         # ──── Squares with textured gradients ────
         for sq in chess.SQUARES:
-            rect = self._square_rect(sq)
+            rect = self._square_rects.get(sq)
+            if rect is None:
+                continue
             file = chess.square_file(sq)
             rank = chess.square_rank(sq)
             is_light = (file + rank) % 2 == 1
 
             if is_light:
-                # Warm sunlit sand gradient
                 sq_grad = QLinearGradient(rect.topLeft(), rect.bottomRight())
                 sq_grad.setColorAt(0.0, QColor("#FAF0CA"))
                 sq_grad.setColorAt(1.0, QColor("#EAD2AC"))
                 painter.setBrush(QBrush(sq_grad))
             else:
-                # Deep tropical lagoon gradient
                 sq_grad = QLinearGradient(rect.topLeft(), rect.bottomRight())
                 sq_grad.setColorAt(0.0, QColor("#1D7874"))
                 sq_grad.setColorAt(1.0, QColor("#13505B"))
@@ -541,13 +959,11 @@ class ChessBoard(QWidget):
             painter.setPen(Qt.PenStyle.NoPen)
             painter.drawRect(rect)
 
-            # Delicate inner border for light squares
             if is_light:
                 painter.setPen(QPen(QColor(212, 175, 55, 30), 0.5))
                 painter.setBrush(Qt.BrushStyle.NoBrush)
                 painter.drawRect(rect.adjusted(1, 1, -1, -1))
             else:
-                # Subtle diagonal water-shimmer highlight on dark squares
                 shimmer_path = QPainterPath()
                 shimmer_path.moveTo(rect.topRight())
                 shimmer_path.lineTo(rect.right() - ss * 0.35, rect.top())
@@ -560,70 +976,102 @@ class ChessBoard(QWidget):
                 painter.setBrush(QBrush(QColor(128, 255, 219, 10)))
                 painter.drawPath(shimmer_path)
 
-        # ──── Last move highlight: warm sunset coral-amber ────
+        painter.end()
+        self._static_board_cache = pix
+        self._board_cache_key = (w_int, h_int, dpr, self._flipped)
+
+    def _get_drag_rect(self, pos: QPointF) -> QRectF:
+        """Calculate the dirty bounding box of a piece floating at cursor including shadow."""
+        psize = self._piece_size
+        ss = self._sq_size
+        x = pos.x() - psize * 0.5
+        y = pos.y() - psize * 0.5
+        return QRectF(x - ss * 0.2, y - ss * 0.2, psize + ss * 0.5, psize + ss * 0.5)
+
+    # ----- painting -----
+    def paintEvent(self, event):
+        cache_key = (self.width(), self.height(), self.devicePixelRatio(), self._flipped)
+        if self._static_board_cache is None or getattr(self, "_board_cache_key", None) != cache_key:
+            self._recompute_geometry()
+            self._render_static_board()
+
+        painter = QPainter(self)
+        if not painter.isActive():
+            return
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        event_rect = event.rect() if event is not None else self.rect()
+        event_rect_f = QRectF(event_rect)
+
+        # 1. Fast blit of pre-rendered static board at logical (0, 0)
+        if self._static_board_cache is not None:
+            painter.drawPixmap(0, 0, self._static_board_cache)
+
+        ss = self._sq_size
+        psize = self._piece_size
+        dpr = self.devicePixelRatio()
+
+        # 2. Last move highlight
         if self.last_move is not None:
-            lm_color = QColor(244, 162, 97, 115)  # rgba(244, 162, 97, 0.45)
-            painter.setBrush(QBrush(lm_color))
+            painter.setBrush(self._cached_pens_brushes["last_move_brush"])
             painter.setPen(Qt.PenStyle.NoPen)
             for sq in (self.last_move.from_square, self.last_move.to_square):
-                painter.drawRect(self._square_rect(sq))
+                sq_rect = self._square_rects.get(sq)
+                if sq_rect and sq_rect.intersects(event_rect_f):
+                    painter.drawRect(sq_rect)
 
-        # ──── Selected square highlight: glowing golden-aqua ring ────
+        # 3. Selected square highlight
         if not self.is_animating and self.selected_square is not None:
-            sel_rect = self._square_rect(self.selected_square)
-            # Golden fill
-            sel_color = QColor(212, 175, 55, 80)
-            painter.setBrush(QBrush(sel_color))
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawRect(sel_rect)
-            # Golden-aqua ring
-            ring_pen = QPen(QColor("#D4AF37"), max(2, ss * 0.06))
-            ring_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-            painter.setPen(ring_pen)
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawRect(sel_rect.adjusted(1.5, 1.5, -1.5, -1.5))
+            sel_rect = self._square_rects.get(self.selected_square)
+            if sel_rect and sel_rect.intersects(event_rect_f):
+                painter.setBrush(self._cached_pens_brushes["sel_brush"])
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.drawRect(sel_rect)
+                painter.setPen(self._cached_pens_brushes["sel_ring_pen"])
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawRect(sel_rect.adjusted(1.5, 1.5, -1.5, -1.5))
 
-        # ──── Check highlight: pulsing crimson-coral radial glow ────
+        # 4. Check highlight: crimson-coral radial glow
         if not self.is_animating and self.board.is_check():
             king_sq = self.board.king(self.board.turn)
             if king_sq is not None:
-                kr = self._square_rect(king_sq)
-                center = kr.center()
-                radius = ss * 0.52
-                check_grad = QRadialGradient(center, radius)
-                check_grad.setColorAt(0.0, QColor(230, 57, 70, 180))
-                check_grad.setColorAt(0.4, QColor(231, 111, 81, 120))
-                check_grad.setColorAt(0.7, QColor(244, 162, 97, 60))
-                check_grad.setColorAt(1.0, QColor(244, 162, 97, 0))
-                painter.setBrush(QBrush(check_grad))
-                painter.setPen(Qt.PenStyle.NoPen)
-                painter.drawEllipse(center, radius, radius)
-                # Crisp ring
-                painter.setPen(QPen(QColor(230, 57, 70, 160), max(1.5, ss * 0.04)))
-                painter.setBrush(Qt.BrushStyle.NoBrush)
-                painter.drawEllipse(center, ss * 0.44, ss * 0.44)
+                kr = self._square_rects.get(king_sq)
+                if kr and kr.intersects(event_rect_f):
+                    center = self._square_centers[king_sq]
+                    radius = ss * 0.52
+                    check_grad = QRadialGradient(center, radius)
+                    check_grad.setColorAt(0.0, QColor(230, 57, 70, 180))
+                    check_grad.setColorAt(0.4, QColor(231, 111, 81, 120))
+                    check_grad.setColorAt(0.7, QColor(244, 162, 97, 60))
+                    check_grad.setColorAt(1.0, QColor(244, 162, 97, 0))
+                    painter.setBrush(QBrush(check_grad))
+                    painter.setPen(Qt.PenStyle.NoPen)
+                    painter.drawEllipse(center, radius, radius)
+                    painter.setPen(self._cached_pens_brushes["check_ring_pen"])
+                    painter.setBrush(Qt.BrushStyle.NoBrush)
+                    painter.drawEllipse(center, ss * 0.44, ss * 0.44)
 
-        # ──── Static Pieces ────
+        # 5. Static pieces (fast HiDPI QPixmap blit)
         for sq in chess.SQUARES:
-            # Skip drawing static piece if it's currently at an animation destination square
             if self.is_animating and sq in self.anim_target_squares:
                 continue
+            if self.is_dragging and sq == self.drag_start_sq:
+                continue  # Piece is being dragged at cursor
 
             piece = self.board.piece_at(sq)
             if piece is None:
                 continue
 
-            renderer = PieceRendererCache.get(piece.color, piece.piece_type)
-            if renderer is None:
+            sq_rect = self._square_rects.get(sq)
+            if sq_rect is None or not sq_rect.intersects(event_rect_f):
                 continue
 
-            rect = self._square_rect(sq)
-            # Slight padding so pieces don't touch the edges
-            padding = ss * 0.06
-            piece_rect = rect.adjusted(padding, padding, -padding, -padding)
-            renderer.render(painter, piece_rect)
+            pix = PiecePixmapCache.get(piece.color, piece.piece_type, psize, dpr)
+            if pix is not None:
+                piece_pt = QPointF(sq_rect.x() + (ss - psize) * 0.5, sq_rect.y() + (ss - psize) * 0.5)
+                painter.drawPixmap(piece_pt, pix)
 
-        # ──── Captured Piece (dissolves into sea mist on impact) ────
+        # 6. Dissolving captured piece
         if self.is_animating and self.anim_captured_info is not None:
             cap_piece, cap_sq = self.anim_captured_info
             if self.anim_progress < 0.65:
@@ -634,81 +1082,92 @@ class ChessBoard(QWidget):
                 cap_opacity = 0.0
 
             if cap_opacity > 0.0:
-                renderer = PieceRendererCache.get(cap_piece.color, cap_piece.piece_type)
-                if renderer:
-                    cap_rect = self._square_rect(cap_sq)
-                    padding = ss * 0.06
-                    cap_piece_rect = cap_rect.adjusted(padding, padding, -padding, -padding)
-                    painter.save()
-                    painter.setOpacity(cap_opacity)
-                    renderer.render(painter, cap_piece_rect)
-                    painter.restore()
+                pix = PiecePixmapCache.get(cap_piece.color, cap_piece.piece_type, psize, dpr)
+                if pix is not None:
+                    cap_rect = self._square_rects.get(cap_sq)
+                    if cap_rect and cap_rect.intersects(event_rect_f):
+                        cap_pt = QPointF(cap_rect.x() + (ss - psize) * 0.5, cap_rect.y() + (ss - psize) * 0.5)
+                        painter.save()
+                        painter.setOpacity(cap_opacity)
+                        painter.drawPixmap(cap_pt, pix)
+                        painter.restore()
 
-        # ──── Animating Pieces (rendered smoothly on top with subtle marine breeze lift) ────
+        # 7. Animating pieces (smooth flight with marine lift shadow)
         if self.is_animating and self.anim_moving_pieces:
+            t = self.anim_progress
             for piece, from_sq, to_sq in self.anim_moving_pieces:
-                start_rect = self._square_rect(from_sq)
-                end_rect = self._square_rect(to_sq)
+                start_rect = self._square_rects.get(from_sq)
+                end_rect = self._square_rects.get(to_sq)
+                if not start_rect or not end_rect:
+                    continue
 
-                t = self.anim_progress
                 cur_x = start_rect.x() + (end_rect.x() - start_rect.x()) * t
                 cur_y = start_rect.y() + (end_rect.y() - start_rect.y()) * t
-                cur_w = start_rect.width() + (end_rect.width() - start_rect.width()) * t
-                cur_h = start_rect.height() + (end_rect.height() - start_rect.height()) * t
-                cur_rect = QRectF(cur_x, cur_y, cur_w, cur_h)
 
-                padding = ss * 0.06
-                piece_rect = cur_rect.adjusted(padding, padding, -padding, -padding)
-
-                # Marine lift shadow underneath flying piece
                 lift = 1.0 - abs(t - 0.5) * 0.6
                 shadow_offset = ss * 0.04 * lift
-                shadow_rect = piece_rect.translated(shadow_offset, shadow_offset * 1.2)
+                shadow_center = QPointF(cur_x + ss * 0.5 + shadow_offset, cur_y + ss * 0.5 + shadow_offset * 1.2)
                 painter.save()
-                shadow_color = QColor(7, 26, 36, int(60 * lift))
-                painter.setBrush(QBrush(shadow_color))
+                painter.setBrush(QBrush(QColor(7, 26, 36, int(60 * lift))))
                 painter.setPen(Qt.PenStyle.NoPen)
-                painter.drawEllipse(shadow_rect.center(), piece_rect.width() * 0.38, piece_rect.height() * 0.38)
+                painter.drawEllipse(shadow_center, ss * 0.38, ss * 0.38)
                 painter.restore()
 
-                renderer = PieceRendererCache.get(piece.color, piece.piece_type)
-                if renderer:
-                    renderer.render(painter, piece_rect)
+                pix = PiecePixmapCache.get(piece.color, piece.piece_type, psize, dpr)
+                if pix is not None:
+                    anim_pt = QPointF(cur_x + (ss - psize) * 0.5, cur_y + (ss - psize) * 0.5)
+                    painter.drawPixmap(anim_pt, pix)
 
-        # ──── Legal move indicators ────
+        # 8. Legal move indicators
         if not self.is_animating and self.selected_square is not None:
             for move in self.legal_moves_for_selected:
-                target_rect = self._square_rect(move.to_square)
-                center = target_rect.center()
+                target_rect = self._square_rects.get(move.to_square)
+                if not target_rect or not target_rect.intersects(event_rect_f):
+                    continue
+                center = self._square_centers[move.to_square]
                 target_piece = self.board.piece_at(move.to_square)
 
                 if target_piece is not None:
-                    # Capture indicator: coral-ringed target on capturable enemy pieces
-                    painter.setPen(QPen(QColor("#E76F51"), max(2.5, ss * 0.07)))
-                    painter.setBrush(QBrush(QColor(231, 111, 81, 35)))
+                    painter.setPen(self._cached_pens_brushes["cap_target_pen"])
+                    painter.setBrush(self._cached_pens_brushes["cap_target_brush"])
                     painter.drawEllipse(center, ss * 0.42, ss * 0.42)
-                    # Inner ring
-                    painter.setPen(QPen(QColor(244, 162, 97, 120), max(1, ss * 0.03)))
+                    painter.setPen(self._cached_pens_brushes["cap_inner_pen"])
                     painter.setBrush(Qt.BrushStyle.NoBrush)
                     painter.drawEllipse(center, ss * 0.35, ss * 0.35)
                 else:
-                    # Empty square: translucent water-droplet / ripple ring
-                    # Outer ripple
-                    painter.setPen(QPen(QColor(128, 255, 219, 80), max(1, ss * 0.025)))
+                    painter.setPen(self._cached_pens_brushes["drop_outer_pen"])
                     painter.setBrush(Qt.BrushStyle.NoBrush)
                     painter.drawEllipse(center, ss * 0.22, ss * 0.22)
-                    # Inner filled droplet
                     painter.setPen(Qt.PenStyle.NoPen)
-                    drop_grad = QRadialGradient(center, ss * 0.16)
-                    drop_grad.setColorAt(0.0, QColor(128, 255, 219, 160))
-                    drop_grad.setColorAt(0.6, QColor(128, 255, 219, 90))
-                    drop_grad.setColorAt(1.0, QColor(128, 255, 219, 30))
-                    painter.setBrush(QBrush(drop_grad))
-                    painter.drawEllipse(center, ss * 0.14, ss * 0.14)
+                    painter.setBrush(QBrush(QColor(10, 95, 130, 200)))
+                    painter.drawEllipse(center, ss * 0.15, ss * 0.15)
+
+        # 9. Drag hover square highlight
+        if self.is_dragging and self.hover_square is not None and self.hover_square != self.drag_start_sq:
+            is_legal = any(m.to_square == self.hover_square for m in self.legal_moves_for_selected)
+            if is_legal:
+                hr = self._square_rects.get(self.hover_square)
+                if hr and hr.intersects(event_rect_f):
+                    painter.setPen(self._cached_pens_brushes["hover_pen"])
+                    painter.setBrush(QBrush(QColor(77, 208, 225, 45)))
+                    painter.drawRect(hr.adjusted(1.5, 1.5, -1.5, -1.5))
+
+        # 10. Dragged piece at cursor
+        if self.is_dragging and self.drag_piece and self.drag_pos:
+            pix = PiecePixmapCache.get(self.drag_piece.color, self.drag_piece.piece_type, psize, dpr)
+            if pix is not None:
+                shadow_offset = ss * 0.08
+                shadow_center = QPointF(self.drag_pos.x() + shadow_offset, self.drag_pos.y() + shadow_offset * 1.2)
+                painter.setBrush(QBrush(QColor(7, 26, 36, 70)))
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.drawEllipse(shadow_center, ss * 0.35, ss * 0.35)
+
+                drag_pt = QPointF(self.drag_pos.x() - psize * 0.5, self.drag_pos.y() - psize * 0.5)
+                painter.drawPixmap(drag_pt, pix)
 
         painter.end()
 
-    # ----- interaction -----
+    # ----- interaction: click-to-move & drag-to-drop with dirty-rect updates -----
     def mousePressEvent(self, event):
         if not self.interactive or self.is_animating:
             return
@@ -720,83 +1179,500 @@ class ChessBoard(QWidget):
         if sq is None:
             return
 
-        # If a piece is already selected, try to make a move
-        if self.selected_square is not None:
-            # Check if the target is a legal destination
-            matching_moves = [
-                m for m in self.legal_moves_for_selected if m.to_square == sq
-            ]
+        # If a piece is already selected and user clicked a destination square
+        if self.selected_square is not None and sq != self.selected_square:
+            matching_moves = [m for m in self.legal_moves_for_selected if m.to_square == sq]
             if matching_moves:
-                move = matching_moves[0]
-                # Check for pawn promotion
-                piece = self.board.piece_at(self.selected_square)
-                if (
-                    piece is not None
-                    and piece.piece_type == chess.PAWN
-                    and chess.square_rank(sq) in (0, 7)
-                ):
-                    dlg = PromotionDialog(piece.color, parent=self)
-                    if dlg.exec() == QDialog.DialogCode.Accepted:
-                        promo_piece = dlg.chosen_piece
-                        promo_moves = [
-                            m for m in matching_moves if m.promotion == promo_piece
-                        ]
-                        move = promo_moves[0] if promo_moves else matching_moves[0]
-                    else:
-                        # Cancelled promotion
-                        self.selected_square = None
-                        self.legal_moves_for_selected = []
-                        self.update()
-                        return
-
-                self.selected_square = None
-                self.legal_moves_for_selected = []
-                self.move_made.emit(move)
+                self._execute_player_move(matching_moves[0], matching_moves)
                 return
 
-            # Clicked same square → deselect
-            if sq == self.selected_square:
+        # Clicked on an own piece: select and initiate drag tracking
+        piece = self.board.piece_at(sq)
+        if piece is not None and piece.color == self.board.turn and piece.color == self.player_color:
+            self._select_square(sq)
+            self.is_dragging = True
+            self.drag_piece = piece
+            self.drag_start_sq = sq
+            self.drag_pos = event.position()
+            self.drag_prev_rect = self._get_drag_rect(self.drag_pos)
+            self.hover_square = sq
+            if sq in self._square_rects_aligned:
+                self.update(self._square_rects_aligned[sq])
+            return
+
+        # Clicked empty square or opponent piece when nothing legal: deselect
+        if self.selected_square is not None:
+            self.selected_square = None
+            self.legal_moves_for_selected = []
+            self.update()
+
+    def mouseMoveEvent(self, event):
+        if not self.is_dragging or self.drag_piece is None:
+            return
+
+        new_pos = event.position()
+        new_rect = self._get_drag_rect(new_pos)
+        dirty_rect = self.drag_prev_rect.united(new_rect) if self.drag_prev_rect else new_rect
+
+        new_hover = self._pos_to_square(new_pos)
+        if new_hover != self.hover_square:
+            if self.hover_square is not None and self.hover_square in self._square_rects_aligned:
+                dirty_rect = dirty_rect.united(QRectF(self._square_rects_aligned[self.hover_square]))
+            if new_hover is not None and new_hover in self._square_rects_aligned:
+                dirty_rect = dirty_rect.united(QRectF(self._square_rects_aligned[new_hover]))
+            self.hover_square = new_hover
+
+        self.drag_pos = new_pos
+        self.drag_prev_rect = new_rect
+
+        # DIRTY RECT REPAINT ONLY — buttery smooth 60+ FPS
+        self.update(dirty_rect.adjusted(-4, -4, 4, 4).toAlignedRect())
+
+    def mouseReleaseEvent(self, event):
+        if not self.is_dragging:
+            return
+
+        start_sq = self.drag_start_sq
+        drag_rect = self.drag_prev_rect
+        self.is_dragging = False
+        self.drag_piece = None
+        self.drag_start_sq = None
+        self.drag_pos = None
+        self.drag_prev_rect = None
+        self.hover_square = None
+
+        release_sq = self._pos_to_square(event.position())
+
+        # If dropped on a destination square, execute move if legal
+        if release_sq is not None and release_sq != start_sq:
+            matching_moves = [m for m in self.legal_moves_for_selected if m.to_square == release_sq]
+            if matching_moves:
+                self._execute_player_move(matching_moves[0], matching_moves)
+                return
+
+        # Released on same square: keep selected for click-to-move; repaint drag area
+        if drag_rect:
+            if start_sq is not None and start_sq in self._square_rects_aligned:
+                drag_rect = drag_rect.united(QRectF(self._square_rects_aligned[start_sq]))
+            self.update(drag_rect.adjusted(-6, -6, 6, 6).toAlignedRect())
+        else:
+            self.update()
+
+    def _execute_player_move(self, move: chess.Move, matching_moves: list[chess.Move]):
+        piece = self.board.piece_at(self.selected_square)
+        if (
+            piece is not None
+            and piece.piece_type == chess.PAWN
+            and chess.square_rank(move.to_square) in (0, 7)
+        ):
+            dlg = PromotionDialog(piece.color, parent=self)
+            if dlg.exec() == QDialog.DialogCode.Accepted:
+                promo_piece = dlg.chosen_piece
+                promo_moves = [m for m in matching_moves if m.promotion == promo_piece]
+                move = promo_moves[0] if promo_moves else matching_moves[0]
+            else:
                 self.selected_square = None
                 self.legal_moves_for_selected = []
                 self.update()
                 return
 
-            # Clicked another own piece → reselect
-            piece_at_sq = self.board.piece_at(sq)
-            if piece_at_sq is not None and piece_at_sq.color == self.board.turn and piece_at_sq.color == self.player_color:
-                self._select_square(sq)
-                return
-
-            # Clicked empty non-legal square → deselect
-            self.selected_square = None
-            self.legal_moves_for_selected = []
-            self.update()
-            return
-
-        # No piece selected yet — try to select
-        piece = self.board.piece_at(sq)
-        if piece is not None and piece.color == self.board.turn and piece.color == self.player_color:
-            self._select_square(sq)
+        self.selected_square = None
+        self.legal_moves_for_selected = []
+        self.move_made.emit(move)
 
     def _select_square(self, sq: int):
+        prev_sq = self.selected_square
         self.selected_square = sq
         self.legal_moves_for_selected = [
             m for m in self.board.legal_moves if m.from_square == sq
         ]
+        dirty = QRectF()
+        if prev_sq is not None and prev_sq in self._square_rects:
+            dirty = dirty.united(self._square_rects[prev_sq])
+        if sq in self._square_rects:
+            dirty = dirty.united(self._square_rects[sq])
+        for m in self.legal_moves_for_selected:
+            if m.to_square in self._square_rects:
+                dirty = dirty.united(self._square_rects[m.to_square])
+        if not dirty.isEmpty():
+            self.update(dirty.adjusted(-6, -6, 6, 6).toAlignedRect())
+        else:
+            self.update()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ActiveSideBadge — circular badge showing active side & state
+# ═══════════════════════════════════════════════════════════════════════════
+class ActiveSideBadge(QWidget):
+    """
+    Circular badge showing active side.
+    White: Sunlit mother-of-pearl & royal gold with ivory crown.
+    Black: Abyssal obsidian & bioluminescent cyan with glowing crown.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(38, 38)
+        self.color: chess.Color = chess.WHITE
+        self.is_check: bool = False
+        self.is_ai_thinking: bool = False
+        self.is_game_over: bool = False
+        self.is_draw: bool = False
+
+    def update_state(self, color: chess.Color, is_check: bool = False,
+                     is_ai_thinking: bool = False, is_game_over: bool = False,
+                     is_draw: bool = False):
+        self.color = color
+        self.is_check = is_check
+        self.is_ai_thinking = is_ai_thinking
+        self.is_game_over = is_game_over
+        self.is_draw = is_draw
         self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        w = float(self.width())
+        h = float(self.height())
+        cx = w / 2.0
+        cy = h / 2.0
+        r = min(w, h) / 2.0 - 2.5
+
+        if self.is_game_over:
+            if self.is_draw:
+                grad = QRadialGradient(cx, cy, r)
+                grad.setColorAt(0.0, QColor("#80FFDB"))
+                grad.setColorAt(0.7, QColor("#2A9D8F"))
+                grad.setColorAt(1.0, QColor("#133B4E"))
+                painter.setBrush(QBrush(grad))
+                painter.setPen(QPen(QColor("#80FFDB"), 2.0))
+                painter.drawEllipse(QPointF(cx, cy), r, r)
+
+                font = QFont("Segoe UI", 14)
+                painter.setFont(font)
+                painter.setPen(QColor("#FFFFFF"))
+                painter.drawText(QRectF(0, 0, w, h), Qt.AlignmentFlag.AlignCenter, "🤝")
+            else:
+                grad = QRadialGradient(cx, cy, r)
+                grad.setColorAt(0.0, QColor("#FFE082"))
+                grad.setColorAt(0.6, QColor("#D4AF37"))
+                grad.setColorAt(1.0, QColor("#9E781E"))
+                painter.setBrush(QBrush(grad))
+                painter.setPen(QPen(QColor("#FFFDF9"), 2.0))
+                painter.drawEllipse(QPointF(cx, cy), r, r)
+
+                font = QFont("Segoe UI", 15)
+                painter.setFont(font)
+                painter.setPen(QColor("#4A3B2C"))
+                painter.drawText(QRectF(0, 0, w, h), Qt.AlignmentFlag.AlignCenter, "👑")
+            painter.end()
+            return
+
+        if self.color == chess.WHITE:
+            # Sunlit Mother-of-Pearl & Gold
+            grad = QRadialGradient(cx - r * 0.25, cy - r * 0.25, r * 1.2)
+            grad.setColorAt(0.0, QColor("#FFFFFF"))
+            grad.setColorAt(0.4, QColor("#FFFDF9"))
+            grad.setColorAt(0.75, QColor("#F3E5AB"))
+            grad.setColorAt(1.0, QColor("#D6C29F"))
+            painter.setBrush(QBrush(grad))
+            pen_color = QColor("#E63946") if self.is_check else QColor("#D4AF37")
+            painter.setPen(QPen(pen_color, 2.2))
+            painter.drawEllipse(QPointF(cx, cy), r, r)
+
+            # Mini piece / symbol
+            font = QFont("Segoe UI", 15, QFont.Weight.Bold)
+            painter.setFont(font)
+            painter.setPen(QColor("#4A3B2C"))
+            painter.drawText(QRectF(0, -1, w, h), Qt.AlignmentFlag.AlignCenter, "♔")
+        else:
+            # Abyssal Obsidian & Bioluminescent Cyan
+            grad = QRadialGradient(cx - r * 0.25, cy - r * 0.25, r * 1.2)
+            grad.setColorAt(0.0, QColor("#1A4B5E"))
+            grad.setColorAt(0.45, QColor("#133B4E"))
+            grad.setColorAt(0.8, QColor("#0E2D3E"))
+            grad.setColorAt(1.0, QColor("#071A24"))
+            painter.setBrush(QBrush(grad))
+            pen_color = QColor("#E63946") if self.is_check else QColor("#80FFDB")
+            painter.setPen(QPen(pen_color, 2.2))
+            painter.drawEllipse(QPointF(cx, cy), r, r)
+
+            # Mini piece / symbol
+            font = QFont("Segoe UI", 15, QFont.Weight.Bold)
+            painter.setFont(font)
+            painter.setPen(QColor("#80FFDB"))
+            painter.drawText(QRectF(0, -1, w, h), Qt.AlignmentFlag.AlignCenter, "♚")
+
+        # Outer ring glow
+        if self.is_check:
+            painter.setPen(QPen(QColor(230, 57, 70, 160), 1.5))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawEllipse(QPointF(cx, cy), r + 2.0, r + 2.0)
+        elif self.is_ai_thinking:
+            painter.setPen(QPen(QColor(128, 255, 219, 140), 1.5))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawEllipse(QPointF(cx, cy), r + 1.8, r + 1.8)
+
+        painter.end()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# BannerStatusLabel — status label that synchronizes with TurnIndicatorBanner
+# ═══════════════════════════════════════════════════════════════════════════
+class BannerStatusLabel(QLabel):
+    """Status label that notifies its parent banner whenever text changes."""
+
+    def __init__(self, text="", parent=None):
+        super().__init__(text, parent)
+        self.banner = parent
+
+    def setText(self, text: str):
+        super().setText(text)
+        if self.banner is not None and hasattr(self.banner, "_on_text_changed"):
+            self.banner._on_text_changed(text)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TurnIndicatorBanner — dedicated prominent status banner directly above board
+# ═══════════════════════════════════════════════════════════════════════════
+class TurnIndicatorBanner(QWidget):
+    """
+    Dedicated, prominent status banner / pill widget positioned directly above the chessboard.
+    Displays active side (White / Black), player vs AI turn, check alerts, and victory announcements
+    with bold typography (16pt-18pt) and luxury beach/ocean glassmorphism styling.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("turnBanner")
+        self.setFixedHeight(56)
+        self.setMinimumWidth(380)
+        self.setMaximumWidth(680)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+
+        self.color: chess.Color = chess.WHITE
+        self.is_player_turn: bool = True
+        self.is_check: bool = False
+        self.is_ai_thinking: bool = False
+        self.is_game_over: bool = False
+        self.is_draw: bool = False
+
+        # Internal layout
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(18, 6, 18, 6)
+        layout.setSpacing(14)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        # Active side circular badge
+        self.badge = ActiveSideBadge(self)
+        layout.addWidget(self.badge)
+
+        # Prominent status label (16pt bold)
+        self.status_label = BannerStatusLabel("Your Turn — White to Move", self)
+        self.status_label.setObjectName("bannerStatusLabel")
+        font = QFont("Segoe UI", 16, QFont.Weight.Bold)
+        self.status_label.setFont(font)
+        self.status_label.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+        layout.addWidget(self.status_label, stretch=1)
+
+        # State chip / pill
+        self.chip = QLabel("YOUR MOVE", self)
+        self.chip.setObjectName("bannerStateChip")
+        chip_font = QFont("Segoe UI", 10, QFont.Weight.Bold)
+        self.chip.setFont(chip_font)
+        self.chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.chip.setFixedHeight(28)
+        layout.addWidget(self.chip)
+
+        self._apply_chip_style()
+
+    def _on_text_changed(self, text: str):
+        """Update badge and chip when text changes directly via status_label.setText."""
+        text_lower = text.lower()
+        if "checkmate" in text_lower or "wins" in text_lower or "draw" in text_lower or "game over" in text_lower:
+            self.is_game_over = True
+            self.is_draw = "draw" in text_lower
+            if "white" in text_lower:
+                self.color = chess.WHITE
+            elif "black" in text_lower:
+                self.color = chess.BLACK
+        elif "check!" in text_lower or "in check" in text_lower:
+            self.is_check = True
+            self.is_ai_thinking = False
+            self.is_game_over = False
+            if "white" in text_lower:
+                self.color = chess.WHITE
+            elif "black" in text_lower:
+                self.color = chess.BLACK
+        elif "thinking" in text_lower or "pondering" in text_lower or "ai plays" in text_lower or "ai played" in text_lower:
+            self.is_ai_thinking = True
+            self.is_player_turn = False
+            self.is_check = False
+            self.is_game_over = False
+        elif "your turn" in text_lower:
+            self.is_player_turn = True
+            self.is_ai_thinking = False
+            self.is_check = False
+            self.is_game_over = False
+            if "white" in text_lower:
+                self.color = chess.WHITE
+            elif "black" in text_lower:
+                self.color = chess.BLACK
+
+        self.badge.update_state(self.color, self.is_check, self.is_ai_thinking, self.is_game_over, self.is_draw)
+        self._apply_chip_style()
+        self.update()
+
+    def update_turn(self, turn: chess.Color, is_player_turn: bool, is_check: bool = False,
+                    is_ai_thinking: bool = False, is_game_over: bool = False, is_draw: bool = False,
+                    custom_text: str | None = None):
+        self.color = turn
+        self.is_player_turn = is_player_turn
+        self.is_check = is_check
+        self.is_ai_thinking = is_ai_thinking
+        self.is_game_over = is_game_over
+        self.is_draw = is_draw
+
+        self.badge.update_state(turn, is_check, is_ai_thinking, is_game_over, is_draw)
+
+        if custom_text:
+            self.status_label.setText(custom_text)
+        elif is_game_over:
+            pass
+        elif is_ai_thinking:
+            self.status_label.setText("AI is thinking in the waves... 🌊")
+        elif is_check:
+            side = "White" if turn == chess.WHITE else "Black"
+            self.status_label.setText(f"Your Turn — {side} in Check! ⚠️")
+        elif is_player_turn:
+            side = "White" if turn == chess.WHITE else "Black"
+            self.status_label.setText(f"Your Turn — {side} to Move")
+        else:
+            side = "White" if turn == chess.WHITE else "Black"
+            self.status_label.setText(f"AI's Turn — {side} to Move")
+
+        self._apply_chip_style()
+        self.update()
+
+    def _apply_chip_style(self):
+        if self.is_game_over:
+            if self.is_draw:
+                self.chip.setText("DRAW")
+                self.chip.setStyleSheet(
+                    "background: rgba(128, 255, 219, 0.20); color: #80FFDB; "
+                    "border: 1.5px solid rgba(128, 255, 219, 0.60); border-radius: 14px; padding: 2px 14px;"
+                )
+            else:
+                self.chip.setText("VICTORY")
+                self.chip.setStyleSheet(
+                    "background: rgba(212, 175, 55, 0.22); color: #FFD166; "
+                    "border: 1.5px solid rgba(212, 175, 55, 0.70); border-radius: 14px; padding: 2px 14px;"
+                )
+        elif self.is_check:
+            self.chip.setText("⚠️ IN CHECK")
+            self.chip.setStyleSheet(
+                "background: rgba(230, 57, 70, 0.25); color: #FF8B94; "
+                "border: 1.5px solid rgba(230, 57, 70, 0.75); border-radius: 14px; padding: 2px 12px;"
+            )
+        elif self.is_ai_thinking:
+            self.chip.setText("🌊 THINKING")
+            self.chip.setStyleSheet(
+                "background: rgba(72, 202, 228, 0.22); color: #80FFDB; "
+                "border: 1.5px solid rgba(128, 255, 219, 0.50); border-radius: 14px; padding: 2px 12px;"
+            )
+        elif self.is_player_turn:
+            self.chip.setText("● YOUR MOVE")
+            self.chip.setStyleSheet(
+                "background: rgba(42, 157, 143, 0.25); color: #A7F3D0; "
+                "border: 1.5px solid rgba(128, 255, 219, 0.55); border-radius: 14px; padding: 2px 12px;"
+            )
+        else:
+            self.chip.setText("WAITING")
+            self.chip.setStyleSheet(
+                "background: rgba(7, 26, 36, 0.60); color: #E0F2F1; "
+                "border: 1.5px solid rgba(128, 255, 219, 0.30); border-radius: 14px; padding: 2px 12px;"
+            )
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        rect = QRectF(self.rect()).adjusted(1, 1, -1, -1)
+        w = float(self.width())
+
+        # Luxury oceanic gradient background
+        grad = QLinearGradient(0, 0, w, 0)
+        if self.is_check:
+            grad.setColorAt(0.0, QColor(42, 14, 20, 235))
+            grad.setColorAt(0.5, QColor(64, 20, 28, 245))
+            grad.setColorAt(1.0, QColor(42, 14, 20, 235))
+            border_pen = QPen(QColor("#E63946"), 2.0)
+        elif self.is_game_over:
+            if self.is_draw:
+                grad.setColorAt(0.0, QColor(8, 38, 46, 235))
+                grad.setColorAt(0.5, QColor(14, 52, 64, 245))
+                grad.setColorAt(1.0, QColor(8, 38, 46, 235))
+                border_pen = QPen(QColor("#80FFDB"), 2.2)
+            else:
+                grad.setColorAt(0.0, QColor(38, 32, 12, 235))
+                grad.setColorAt(0.5, QColor(56, 46, 16, 245))
+                grad.setColorAt(1.0, QColor(38, 32, 12, 235))
+                border_pen = QPen(QColor("#D4AF37"), 2.2)
+        else:
+            grad.setColorAt(0.0, QColor(7, 26, 36, 230))
+            grad.setColorAt(0.5, QColor(14, 46, 64, 240))
+            grad.setColorAt(1.0, QColor(7, 26, 36, 230))
+            border_pen = QPen(QColor(128, 255, 219, 90), 1.5)
+
+        path = QPainterPath()
+        path.addRoundedRect(rect, 16, 16)
+        painter.fillPath(path, QBrush(grad))
+        painter.strokePath(path, border_pen)
+
+        # Subtle gold/cyan top highlight shimmer
+        shimmer_rect = QRectF(rect.x() + 10, rect.y() + 1.5, rect.width() - 20, rect.height() * 0.45)
+        shimmer_grad = QLinearGradient(0, shimmer_rect.top(), 0, shimmer_rect.bottom())
+        shimmer_grad.setColorAt(0.0, QColor(255, 255, 255, 35))
+        shimmer_grad.setColorAt(1.0, QColor(255, 255, 255, 0))
+        shimmer_path = QPainterPath()
+        shimmer_path.addRoundedRect(shimmer_rect, 14, 14)
+        painter.fillPath(shimmer_path, QBrush(shimmer_grad))
+
+        painter.end()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
 # CentralBackground — paints immersive coastal beach panorama
 # ═══════════════════════════════════════════════════════════════════════════
 class CentralBackground(QWidget):
-    """Central widget that paints an attractive tropical beach & ocean resort panorama."""
+    """Central widget that paints an attractive tropical beach & ocean resort panorama.
+    Pre-renders the entire panorama into a HiDPI QPixmap cache regenerated ONLY on resizeEvent.
+    """
 
-    def paintEvent(self, event):
-        painter = QPainter(self)
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._bg_cache: QPixmap | None = None
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._render_cache()
+
+    def _render_cache(self):
+        w_int = self.width()
+        h_int = self.height()
+        if w_int <= 0 or h_int <= 0:
+            return
+        dpr = self.devicePixelRatio()
+        phys_w = max(1, int(round(w_int * dpr)))
+        phys_h = max(1, int(round(h_int * dpr)))
+        pix = QPixmap(phys_w, phys_h)
+        pix.setDevicePixelRatio(dpr)
+        painter = QPainter(pix)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        w = float(self.width())
-        h = float(self.height())
+
+        w = float(w_int)
+        h = float(h_int)
 
         # ──── 1. Sunlit Tropical Sky (y = 0 to 0.38 * h) ────
         sky_h = 0.38 * h
@@ -945,7 +1821,6 @@ class CentralBackground(QWidget):
         painter.drawPath(sand_path)
 
         # ──── Palm Tree Silhouette on Right Shore (around x = 0.68 * w) ────
-        # Soft diagonal shadow cast on the sand (rgba(93, 64, 55, 0.18))
         shadow = QPainterPath()
         shadow.moveTo(0.73 * w, 0.88 * h)
         shadow.cubicTo(0.78 * w, 0.89 * h, 0.84 * w, 0.92 * h, 0.88 * w, 0.94 * h)
@@ -954,8 +1829,6 @@ class CentralBackground(QWidget):
         painter.setBrush(QBrush(QColor(93, 64, 55, 46)))
         painter.drawPath(shadow)
 
-        # Gracefully curved brown coconut trunk (#5D4037 / #8D6E63)
-        # Rising from (0.74 * w, 0.88 * h) up to (0.66 * w, 0.22 * h)
         trunk = QPainterPath()
         trunk.moveTo(0.73 * w, 0.88 * h)
         trunk.cubicTo(0.72 * w, 0.65 * h, 0.69 * w, 0.42 * h, 0.656 * w, 0.22 * h)
@@ -970,7 +1843,6 @@ class CentralBackground(QWidget):
         painter.setBrush(QBrush(trunk_grad))
         painter.drawPath(trunk)
 
-        # Coconut trunk rings / texture
         painter.setPen(QPen(QColor(60, 40, 30, 80), 1.2))
         for t in [0.35, 0.45, 0.55, 0.65, 0.75, 0.82]:
             tx = (1 - t) * (0.74 * w) + t * (0.66 * w) - 2
@@ -978,7 +1850,6 @@ class CentralBackground(QWidget):
             tw = 12 * (1 - 0.4 * t)
             painter.drawLine(QPointF(tx - tw / 2, ty), QPointF(tx + tw / 2, ty + 1))
 
-        # 3 Coconuts at crown (0.66 * w, 0.22 * h)
         crown_x = 0.66 * w
         crown_y = 0.22 * h
         painter.setPen(QPen(QColor("#3E2723"), 1.0))
@@ -987,20 +1858,18 @@ class CentralBackground(QWidget):
         painter.drawEllipse(QPointF(crown_x + 3.5, crown_y + 3), 4.5, 5.0)
         painter.drawEllipse(QPointF(crown_x, crown_y + 6), 4.0, 4.5)
 
-        # 7 Lush arching palm fronds radiating from top of trunk in tropical greens
         frond_colors = [
             QColor("#1B5E20"), QColor("#2E7D32"), QColor("#388E3C"),
             QColor("#43A047"), QColor("#2E7D32"), QColor("#1B5E20"), QColor("#388E3C")
         ]
         frond_curves = [
-            # (dx_ctrl, dy_ctrl, dx_tip, dy_tip) relative to crown
-            (-0.11 * w, -0.06 * h, -0.15 * w, -0.01 * h),   # 1. arch left-up
-            (-0.13 * w, -0.01 * h, -0.16 * w, 0.08 * h),    # 2. arch left-mid
-            (-0.09 * w, 0.06 * h, -0.12 * w, 0.16 * h),     # 3. arch left-down
-            (-0.02 * w, -0.10 * h, 0.0 * w, -0.12 * h),     # 4. arch straight up
-            (0.08 * w, -0.08 * h, 0.13 * w, -0.03 * h),     # 5. arch right-up
-            (0.12 * w, -0.02 * h, 0.15 * w, 0.07 * h),      # 6. arch right-mid
-            (0.09 * w, 0.06 * h, 0.11 * w, 0.15 * h),       # 7. arch right-down
+            (-0.11 * w, -0.06 * h, -0.15 * w, -0.01 * h),
+            (-0.13 * w, -0.01 * h, -0.16 * w, 0.08 * h),
+            (-0.09 * w, 0.06 * h, -0.12 * w, 0.16 * h),
+            (-0.02 * w, -0.10 * h, 0.0 * w, -0.12 * h),
+            (0.08 * w, -0.08 * h, 0.13 * w, -0.03 * h),
+            (0.12 * w, -0.02 * h, 0.15 * w, 0.07 * h),
+            (0.09 * w, 0.06 * h, 0.11 * w, 0.15 * h),
         ]
 
         for idx, (fc, (cx_c, cy_c, tx_c, ty_c)) in enumerate(zip(frond_colors, frond_curves)):
@@ -1019,11 +1888,9 @@ class CentralBackground(QWidget):
             painter.setBrush(QBrush(fc))
             painter.drawPath(blade)
 
-            # Central vein stroke
             painter.setPen(QPen(QColor(255, 255, 255, 70), 1.0))
             painter.drawLine(QPointF(crown_x, crown_y), QPointF(tip_x, tip_y))
 
-        # ──── Foreground Starfish & Seashell (lower-right sand 0.62 * w, 0.85 * h) ────
         star_cx = 0.62 * w
         star_cy = 0.85 * h
         star_r = 13.0
@@ -1045,12 +1912,10 @@ class CentralBackground(QWidget):
         painter.setBrush(QBrush(QColor("#E76F51")))
         painter.drawPath(star_path)
 
-        # Starfish center dots
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QBrush(QColor("#FFF59D")))
         painter.drawEllipse(QPointF(star_cx, star_cy), 2.2, 2.2)
 
-        # White seashell resting next to starfish (0.65 * w, 0.87 * h)
         shell_cx = 0.65 * w
         shell_cy = 0.87 * h
         shell_path = QPainterPath()
@@ -1067,13 +1932,26 @@ class CentralBackground(QWidget):
         painter.setBrush(QBrush(shell_grad))
         painter.drawPath(shell_path)
 
-        # Seashell ridges
         painter.setPen(QPen(QColor("#D4AF37"), 0.8))
         painter.drawLine(QPointF(shell_cx, shell_cy + 6), QPointF(shell_cx - 5, shell_cy - 3))
         painter.drawLine(QPointF(shell_cx, shell_cy + 6), QPointF(shell_cx - 5, shell_cy - 5))
         painter.drawLine(QPointF(shell_cx, shell_cy + 6), QPointF(shell_cx + 5, shell_cy - 3))
 
         painter.end()
+        self._bg_cache = pix
+        self._bg_cache_key = (w_int, h_int, dpr)
+
+    def paintEvent(self, event):
+        bg_key = (self.width(), self.height(), self.devicePixelRatio())
+        if self._bg_cache is None or getattr(self, "_bg_cache_key", None) != bg_key:
+            self._render_cache()
+
+        if self._bg_cache is not None:
+            painter = QPainter(self)
+            if not painter.isActive():
+                return
+            painter.drawPixmap(0, 0, self._bg_cache)
+            painter.end()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1116,27 +1994,42 @@ class AquaChessWindow(QMainWindow):
         self.setCentralWidget(central)
 
         main_layout = QHBoxLayout(central)
-        main_layout.setContentsMargins(10, 10, 10, 10)
-        main_layout.setSpacing(10)
+        main_layout.setContentsMargins(12, 10, 12, 10)
+        main_layout.setSpacing(12)
 
         # ---- eval bar (left) ----
         self.eval_bar = EvalBar()
         main_layout.addWidget(self.eval_bar)
 
-        # ---- chess board (center) ----
+        # ---- center column: prominent turn indicator + chess board ----
+        board_container = QWidget()
+        board_container.setObjectName("boardContainer")
+        board_layout = QVBoxLayout(board_container)
+        board_layout.setContentsMargins(0, 0, 0, 0)
+        board_layout.setSpacing(8)
+
+        # Dedicated Prominent Turn Indicator Banner directly centered above chessboard
+        self.turn_banner = TurnIndicatorBanner(self)
+        self.status_label = self.turn_banner.status_label
+        board_layout.addWidget(self.turn_banner, alignment=Qt.AlignmentFlag.AlignHCenter)
+
+        # Chess board (center)
         self.chess_board = ChessBoard(self.board)
         self.chess_board.move_made.connect(self.on_player_move)
-        main_layout.addWidget(self.chess_board, stretch=1)
+        self.chess_board.game_over_overlay.play_again_clicked.connect(self.new_game)
+        board_layout.addWidget(self.chess_board, stretch=1)
+
+        main_layout.addWidget(board_container, stretch=1)
 
         # ---- sidebar (right) ----
         sidebar = QWidget()
         sidebar.setFixedWidth(280)
         sidebar.setObjectName("sidebar")
         sidebar_layout = QVBoxLayout(sidebar)
-        sidebar_layout.setContentsMargins(12, 16, 12, 12)
+        sidebar_layout.setContentsMargins(12, 14, 12, 12)
         sidebar_layout.setSpacing(10)
 
-        # Title
+        # Title & Subtitle
         title_label = QLabel("🌊 Aqua Chess")
         title_label.setObjectName("titleLabel")
         title_font = QFont("Segoe UI", 22, QFont.Weight.Bold)
@@ -1144,14 +2037,10 @@ class AquaChessWindow(QMainWindow):
         title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         sidebar_layout.addWidget(title_label)
 
-        # Status
-        self.status_label = QLabel("Your Turn — White to Move")
-        self.status_label.setObjectName("statusLabel")
-        status_font = QFont("Segoe UI", 11)
-        self.status_label.setFont(status_font)
-        self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.status_label.setWordWrap(True)
-        sidebar_layout.addWidget(self.status_label)
+        sub_label = QLabel("Beach Resort Chess")
+        sub_label.setObjectName("subtitleLabel")
+        sub_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        sidebar_layout.addWidget(sub_label)
 
         # Difficulty selector
         diff_label = QLabel("Difficulty")
@@ -1389,11 +2278,14 @@ class AquaChessWindow(QMainWindow):
         self.pending_ai_move = None
         self.ai_delay_elapsed = False
 
-        if self.ai_worker is not None and self.ai_worker.isRunning():
-            self.ai_worker.terminate()
-            self.ai_worker.wait(500)
+        if self.ai_worker is not None:
+            try:
+                self.ai_worker.result_ready.disconnect()
+            except (RuntimeError, TypeError):
+                pass
             self.ai_worker = None
 
+        self.chess_board.hide_game_over()
         self.chess_board.reset_animation()
 
         self.board.reset()
@@ -1410,6 +2302,14 @@ class AquaChessWindow(QMainWindow):
             self.chess_board.flipped = True
             self.set_busy_state(True)
             self.status_label.setText("AI is thinking in the waves... 🌊")
+            self.turn_banner.update_turn(
+                turn=chess.WHITE,
+                is_player_turn=False,
+                is_check=False,
+                is_ai_thinking=True,
+                is_game_over=False,
+                custom_text="AI is thinking in the waves... 🌊"
+            )
             self.update_display()
             # Start AI calculation as White for the opening move
             board_copy = copy.deepcopy(self.board)
@@ -1428,6 +2328,7 @@ class AquaChessWindow(QMainWindow):
         if not self.board.move_stack:
             return
 
+        self.chess_board.hide_game_over()
         self.chess_board.reset_animation()
 
         # If it's the AI's turn (e.g. human moved and AI has not responded yet), pop 1 move
@@ -1479,14 +2380,28 @@ class AquaChessWindow(QMainWindow):
         if self.board.is_game_over():
             return  # status was already set by check_game_over
 
-        if self.board.turn == self.player_color:
-            color_name = "White" if self.board.turn == chess.WHITE else "Black"
-            if self.board.is_check():
-                self.status_label.setText(f"Your Turn — {color_name} in Check! ⚠️")
+        is_player = (self.board.turn == self.player_color)
+        is_check = self.board.is_check()
+        color_name = "White" if self.board.turn == chess.WHITE else "Black"
+
+        if is_player:
+            if is_check:
+                msg = f"Your Turn — {color_name} in Check! ⚠️"
             else:
-                self.status_label.setText(f"Your Turn — {color_name} to Move")
+                msg = f"Your Turn — {color_name} to Move"
         else:
-            self.status_label.setText("AI is thinking in the waves... 🌊")
+            msg = "AI is thinking in the waves... 🌊"
+
+        self.status_label.setText(msg)
+        self.turn_banner.update_turn(
+            turn=self.board.turn,
+            is_player_turn=is_player,
+            is_check=is_check,
+            is_ai_thinking=not is_player,
+            is_game_over=False,
+            is_draw=False,
+            custom_text=msg
+        )
 
     def update_move_history(self):
         """Parse board.move_stack into SAN pairs and fill the table."""
@@ -1591,17 +2506,52 @@ class AquaChessWindow(QMainWindow):
             return False
 
         if outcome.termination == chess.Termination.CHECKMATE:
-            winner = "White" if outcome.winner == chess.WHITE else "Black"
-            self.status_label.setText(f"♚ Checkmate! {winner} wins!")
+            winner_color = outcome.winner
+            winner = "White" if winner_color == chess.WHITE else "Black"
+            title = f"{winner.upper()} WINS!"
+            subtitle = "Checkmate"
+            status_text = f"♚ Checkmate! {winner} wins!"
+            is_draw = False
         elif outcome.termination == chess.Termination.STALEMATE:
-            self.status_label.setText("Draw — Stalemate")
+            winner_color = None
+            title = "DRAW"
+            subtitle = "Stalemate"
+            status_text = "Draw — Stalemate"
+            is_draw = True
         elif outcome.termination == chess.Termination.INSUFFICIENT_MATERIAL:
-            self.status_label.setText("Draw — Insufficient Material")
+            winner_color = None
+            title = "DRAW"
+            subtitle = "Insufficient Material"
+            status_text = "Draw — Insufficient Material"
+            is_draw = True
         elif outcome.termination == chess.Termination.THREEFOLD_REPETITION:
-            self.status_label.setText("Draw — Threefold Repetition")
+            winner_color = None
+            title = "DRAW"
+            subtitle = "Threefold Repetition"
+            status_text = "Draw — Threefold Repetition"
+            is_draw = True
         elif outcome.termination == chess.Termination.FIFTY_MOVES:
-            self.status_label.setText("Draw — Fifty-Move Rule")
+            winner_color = None
+            title = "DRAW"
+            subtitle = "Fifty-Move Rule"
+            status_text = "Draw — Fifty-Move Rule"
+            is_draw = True
         else:
-            self.status_label.setText("Game Over — Draw")
+            winner_color = None
+            title = "DRAW"
+            subtitle = "Game Over"
+            status_text = "Game Over — Draw"
+            is_draw = True
 
+        self.status_label.setText(status_text)
+        self.turn_banner.update_turn(
+            turn=self.board.turn,
+            is_player_turn=False,
+            is_check=False,
+            is_ai_thinking=False,
+            is_game_over=True,
+            is_draw=is_draw,
+            custom_text=f"👑 {title} — {subtitle}" if not is_draw else f"🤝 {title} — {subtitle}"
+        )
+        self.chess_board.show_game_over(winner_color, title, subtitle, is_draw)
         return True

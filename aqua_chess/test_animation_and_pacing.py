@@ -33,7 +33,7 @@ def run_all_tests():
     app = QApplication.instance() or QApplication(sys.argv)
     print("--- 1. Testing Timing & Animation Constants ---")
     assert 250 <= MOVE_ANIM_DURATION_MS <= 350, f"Move anim duration {MOVE_ANIM_DURATION_MS} out of bounds"
-    assert 700 <= AI_PRE_MOVE_DELAY_MS <= 1000, f"AI pre-move delay {AI_PRE_MOVE_DELAY_MS} out of bounds"
+    assert 500 <= AI_PRE_MOVE_DELAY_MS <= 1000, f"AI pre-move delay {AI_PRE_MOVE_DELAY_MS} out of bounds"
     assert 300 <= AI_POST_MOVE_PAUSE_MS <= 500, f"AI post-move pause {AI_POST_MOVE_PAUSE_MS} out of bounds"
     print("  ✓ Constants in correct ranges")
 
