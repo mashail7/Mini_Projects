@@ -392,14 +392,17 @@ class AquaEngine:
         return self._evaluate_white(board)
 
     def find_best_move(
-        self, board: chess.Board, difficulty: str
+        self, board: chess.Board, difficulty: str = "Beach Breeze (Easy)"
     ) -> tuple[chess.Move, int]:
         """
-        Find the best move for the current position.
+        Find the best move for the current position based on difficulty tier.
 
         Args:
             board: current chess.Board position.
-            difficulty: one of "Beach Breeze", "High Tide", "Tsunami".
+            difficulty: string specifying difficulty tier:
+                - Level 1: "Beach Breeze (Easy)", "Calmer Waters (Easy)", "Easy", etc.
+                - Level 2: "High Tide (Medium)", "Steady Tide (Medium)", "Medium", etc.
+                - Level 3: "Tsunami (Hard)", "Deep Abyss (Hard)", "Hard", etc.
 
         Returns:
             (best_move, eval_score) where eval_score is in centipawns from
@@ -408,15 +411,17 @@ class AquaEngine:
         self.nodes = 0
         self.abort = False
 
-        if difficulty == "Beach Breeze":
-            return self._search_fixed_depth(board, max_depth=2, noise=15)
-        elif difficulty == "High Tide":
-            return self._search_fixed_depth(board, max_depth=3, noise=0)
-        elif difficulty == "Tsunami":
-            return self._search_iterative(board, max_depth=4, time_limit=2.5)
+        if not board.legal_moves:
+            return chess.Move.null(), 0
+
+        diff = difficulty.lower().strip() if difficulty else ""
+        if "easy" in diff or "breeze" in diff or "calm" in diff:
+            return self._search_easy(board)
+        elif "hard" in diff or "tsunami" in diff or "abyss" in diff:
+            return self._search_hard(board)
         else:
-            # Default to medium
-            return self._search_fixed_depth(board, max_depth=3, noise=0)
+            # Default to medium ("medium", "high tide", "steady tide", etc.)
+            return self._search_medium(board)
 
     # ------------------------------------------------------------------
     # Internal evaluation
@@ -458,6 +463,20 @@ class AquaEngine:
         if self._noise:
             score += random.randint(-self._noise, self._noise)
 
+        return score
+
+    def _evaluate_raw_material(self, board: chess.Board) -> int:
+        """
+        Pure raw material count from White's perspective in centipawns.
+        Does NOT use Piece-Square Tables, positional bonuses, or check/threat awareness.
+        Used for beginner-friendly (Easy) difficulty.
+        """
+        score = 0
+        for pt in [chess.PAWN, chess.KNIGHT, chess.BISHOP, chess.ROOK, chess.QUEEN]:
+            val = PIECE_VALUES[pt]
+            white_count = len(board.pieces(pt, chess.WHITE))
+            black_count = len(board.pieces(pt, chess.BLACK))
+            score += (white_count - black_count) * val
         return score
 
     # ------------------------------------------------------------------
@@ -823,6 +842,148 @@ class AquaEngine:
     # ------------------------------------------------------------------
     # Search drivers
     # ------------------------------------------------------------------
+
+    def _search_easy(self, board: chess.Board) -> tuple[chess.Move, int]:
+        """
+        Level 1 — Very Easy (Easy):
+        Beginner-friendly and easily beatable. Plays like a casual novice who
+        misses tactics and hangs pieces.
+        - With ~45% probability, picks a completely random legal move.
+        - With the remaining ~55%, performs a 1-ply (depth=1) evaluation based
+          ONLY on raw material count (no Piece-Square Tables, no check/threat awareness)
+          plus heavy random noise (random.randint(-250, 250) centipawns).
+        """
+        legal_moves = list(board.legal_moves)
+        if not legal_moves:
+            return chess.Move.null(), 0
+
+        self.nodes += 1
+        # ~45% probability: pick a completely random legal move
+        if random.random() < 0.45:
+            move = random.choice(legal_moves)
+            board.push(move)
+            eval_score = self.evaluate(board)
+            board.pop()
+            return move, eval_score
+
+        # ~55%: 1-ply raw material count + heavy noise (-250 to 250 cp)
+        us = board.turn
+        scored_moves = []
+        for move in legal_moves:
+            self.nodes += 1
+            board.push(move)
+            raw_mat_white = self._evaluate_raw_material(board)
+            rel_score = raw_mat_white if us == chess.WHITE else -raw_mat_white
+            board.pop()
+
+            noise = random.randint(-250, 250)
+            noisy_score = rel_score + noise
+            scored_moves.append((noisy_score, rel_score, move))
+
+        scored_moves.sort(key=lambda x: x[0], reverse=True)
+        best_move = scored_moves[0][2]
+        board.push(best_move)
+        eval_score = self.evaluate(board)
+        board.pop()
+        return best_move, eval_score
+
+    def _negamax_no_q(
+        self, board: chess.Board, depth: int, alpha: int, beta: int, ply: int
+    ) -> int:
+        """
+        Negamax search without quiescence search.
+        Used by Medium difficulty to avoid deep tactical calculation (so it misses
+        2-move tactical traps).
+        """
+        self.nodes += 1
+
+        if board.is_checkmate():
+            return -MATE_SCORE + ply
+        if board.is_stalemate() or board.is_insufficient_material() or board.can_claim_draw():
+            return 0
+
+        # Leaf node: purely static evaluation without quiescence search
+        if depth <= 0:
+            return self._evaluate_relative(board)
+
+        moves = self.order_moves(board)
+        if not moves:
+            if board.is_check():
+                return -MATE_SCORE + ply
+            return 0
+
+        best_score = -INF
+        for move in moves:
+            board.push(move)
+            score = -self._negamax_no_q(board, depth - 1, -beta, -alpha, ply + 1)
+            board.pop()
+
+            if score > best_score:
+                best_score = score
+            if score > alpha:
+                alpha = score
+            if alpha >= beta:
+                break
+
+        return best_score
+
+    def _search_medium(self, board: chess.Board) -> tuple[chess.Move, int]:
+        """
+        Level 2 — Casual / Fairly Easy (Medium):
+        Beatable for an average player. Plays basic sensible moves (captures
+        hanging pieces when obvious), avoids constant random self-blunders,
+        but doesn't calculate deep combinations or punish subtle mistakes.
+        - Depth 2 Negamax with Alpha-Beta, NO quiescence search (misses 2-move tactical traps).
+        - Moderate evaluation noise (random.randint(-75, 75) centipawns).
+        - ~15% probability: picks from top 3-4 candidate moves instead of #1.
+        """
+        legal_moves = self.order_moves(board)
+        if not legal_moves:
+            return chess.Move.null(), 0
+
+        if len(legal_moves) == 1:
+            move = legal_moves[0]
+            board.push(move)
+            eval_score = self.evaluate(board)
+            board.pop()
+            return move, eval_score
+
+        scored_moves = []
+        for move in legal_moves:
+            self.nodes += 1
+            board.push(move)
+            # Evaluate opponent reply at depth 1 without quiescence search
+            score = -self._negamax_no_q(board, depth=1, alpha=-INF, beta=INF, ply=1)
+            board.pop()
+
+            noise = random.randint(-75, 75)
+            noisy_score = score + noise
+            scored_moves.append((noisy_score, score, move))
+
+        scored_moves.sort(key=lambda x: x[0], reverse=True)
+
+        # ~15% chance to pick from top 3-4 candidate moves instead of #1
+        if random.random() < 0.15 and len(scored_moves) > 1:
+            top_n = min(4, len(scored_moves))
+            chosen = random.choice(scored_moves[:top_n])
+        else:
+            chosen = scored_moves[0]
+
+        best_move = chosen[2]
+        board.push(best_move)
+        eval_score = self.evaluate(board)
+        board.pop()
+        return best_move, eval_score
+
+    def _search_hard(self, board: chess.Board) -> tuple[chess.Move, int]:
+        """
+        Level 3 — Challenging (Hard):
+        A genuinely tough opponent playing solid, tactical chess.
+        - Full Depth 3-4 Negamax with Alpha-Beta pruning + Quiescence search
+          + full Piece-Square Tables (PST) + MVV-LVA move ordering.
+        - Zero random noise (0 cp) — always picks the strongest calculated move.
+        """
+        return self._search_iterative(board, max_depth=4, time_limit=2.5)
 
     def _search_fixed_depth(
         self, board: chess.Board, max_depth: int, noise: int

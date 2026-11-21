@@ -5,10 +5,10 @@ A desktop chess application featuring a custom-built Python chess engine and an 
 ## ✨ Features
 
 - **Human vs. AI** – Play chess against a custom-built chess engine.
-- **Three Difficulty Levels**
-  - 🏖️ **Beach Breeze** – Easy
-  - 🌊 **High Tide** – Medium
-  - 🌪️ **Tsunami** – Hard
+- **Three Distinct AI Difficulty Levels**
+  - 🌴 **Beach Breeze (Easy)** – Novice & beginner-friendly; makes frequent casual blunders and random candidate moves (~45% random, 55% 1-ply raw material with noise).
+  - 🌊 **High Tide (Medium)** – Casual & beatable; Depth 2 Negamax without quiescence, captures hanging pieces but misses multi-ply tactical traps.
+  - 🌪️ **Tsunami (Hard)** – Challenging tactical opponent; Depth 3–4 Iterative Deepening Negamax with Alpha-Beta pruning, Quiescence search, and full Piece-Square Tables (PST).
 - **Custom Chess Engine** – Negamax, Alpha-Beta Pruning, Iterative Deepening, and Quiescence Search.
 - **Custom SVG Pieces** – Twelve individually designed vector chess pieces embedded directly in code.
 - **Coastal UI** – Beach-inspired colors, visual effects, and a glassmorphism dashboard.

@@ -66,9 +66,24 @@ INITIAL_MATERIAL = {
 }
 
 DIFFICULTY_MAP = {
-    "🌴 Beach Breeze": "Beach Breeze",
-    "🌊 High Tide": "High Tide",
-    "🌊 Tsunami": "Tsunami",
+    # Themed with explicit tier in parentheses
+    "🌴 Beach Breeze (Easy)": "Beach Breeze (Easy)",
+    "🌊 High Tide (Medium)": "High Tide (Medium)",
+    "🌊 Tsunami (Hard)": "Tsunami (Hard)",
+    # Alternative ocean/beach themes
+    "Calmer Waters (Easy)": "Beach Breeze (Easy)",
+    "Steady Tide (Medium)": "High Tide (Medium)",
+    "Deep Abyss (Hard)": "Tsunami (Hard)",
+    # Backward compatibility mappings
+    "🌴 Beach Breeze": "Beach Breeze (Easy)",
+    "🌊 High Tide": "High Tide (Medium)",
+    "🌊 Tsunami": "Tsunami (Hard)",
+    "Beach Breeze": "Beach Breeze (Easy)",
+    "High Tide": "High Tide (Medium)",
+    "Tsunami": "Tsunami (Hard)",
+    "Easy": "Beach Breeze (Easy)",
+    "Medium": "High Tide (Medium)",
+    "Hard": "Tsunami (Hard)",
 }
 
 # ---------------------------------------------------------------------------
@@ -1971,6 +1986,7 @@ class AquaChessWindow(QMainWindow):
         self.player_color: chess.Color = chess.WHITE
         self.ai_worker: AIWorker | None = None
         self.last_eval: int = 0
+        self.active_difficulty: str = "Beach Breeze (Easy)"
 
         # AI pacing, synchronization, and animation state
         self.is_busy: bool = False
@@ -2047,8 +2063,14 @@ class AquaChessWindow(QMainWindow):
         diff_label.setObjectName("sectionLabel")
         sidebar_layout.addWidget(diff_label)
         self.difficulty_combo = QComboBox()
-        self.difficulty_combo.addItems(["🌴 Beach Breeze", "🌊 High Tide", "🌊 Tsunami"])
+        self.difficulty_combo.addItems([
+            "🌴 Beach Breeze (Easy)",
+            "🌊 High Tide (Medium)",
+            "🌊 Tsunami (Hard)",
+        ])
         self.difficulty_combo.setObjectName("difficultyCombo")
+        self.difficulty_combo.setCurrentIndex(0)
+        self.difficulty_combo.currentIndexChanged.connect(self._on_difficulty_changed)
         sidebar_layout.addWidget(self.difficulty_combo)
 
         # Color selector
@@ -2130,8 +2152,13 @@ class AquaChessWindow(QMainWindow):
         self.new_game_btn.setEnabled(True)
 
     # ------------------------------------------------------------------
-    # Color change
+    # Difficulty & Color change
     # ------------------------------------------------------------------
+    def _on_difficulty_changed(self, index: int = 0):
+        """Immediately update the active AI difficulty parameter."""
+        key = self.difficulty_combo.currentText()
+        self.active_difficulty = DIFFICULTY_MAP.get(key, "Beach Breeze (Easy)")
+
     def _on_color_changed(self, index: int):
         if self.is_busy:
             return
@@ -2173,7 +2200,8 @@ class AquaChessWindow(QMainWindow):
         self.ai_delay_elapsed = False
 
         difficulty_key = self.difficulty_combo.currentText()
-        difficulty = DIFFICULTY_MAP.get(difficulty_key, "Beach Breeze")
+        difficulty = DIFFICULTY_MAP.get(difficulty_key, self.active_difficulty)
+        self.active_difficulty = difficulty
 
         self.ai_worker = AIWorker(board_copy, difficulty, self.engine, parent=self)
         self.ai_worker.result_ready.connect(
