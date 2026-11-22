@@ -933,7 +933,7 @@ class ChessBoard(QWidget):
 
         for col in range(8):
             file_idx = (7 - col) if self._flipped else col
-            file_label = chr(ord("a") + file_idx)
+            file_label = chr(ord("A") + file_idx)
             # Top
             top_rect = QRectF(grid_x + col * sq_size, origin_y, sq_size, margin)
             painter.drawText(top_rect, Qt.AlignmentFlag.AlignCenter, file_label)
