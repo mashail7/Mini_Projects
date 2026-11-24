@@ -21,12 +21,13 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
     QComboBox, QLabel, QTableWidget, QTableWidgetItem, QDialog,
-    QSizePolicy, QHeaderView, QAbstractItemView, QFrame,
+    QSizePolicy, QHeaderView, QAbstractItemView, QFrame, QSlider,
 )
 from PySide6.QtSvg import QSvgRenderer
 
 from engine import AquaEngine
 from assets import PIECE_SVGS, STYLESHEET, COLORS
+from sound_manager import SoundManager, DEFAULT_VOLUME
 
 
 # ---------------------------------------------------------------------------
@@ -2002,6 +2003,13 @@ class AquaChessWindow(QMainWindow):
         self.ai_pause_timer.setSingleShot(True)
         self.ai_pause_timer.timeout.connect(self._on_ai_pause_timeout)
 
+        # --- audio / sound effects manager ---
+        self.sound_manager = SoundManager(self, initial_volume=DEFAULT_VOLUME)
+        self._is_slider_dragging = False
+        self._slider_preview_timer = QTimer(self)
+        self._slider_preview_timer.setSingleShot(True)
+        self._slider_preview_timer.timeout.connect(self._play_volume_preview)
+
         # --- stylesheet ---
         self.setStyleSheet(STYLESHEET)
 
@@ -2115,6 +2123,47 @@ class AquaChessWindow(QMainWindow):
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         sidebar_layout.addWidget(self.move_table, stretch=1)
 
+        # Sound Controls (Mute toggle + Volume slider)
+        sound_panel = QFrame()
+        sound_panel.setObjectName("soundPanel")
+        sound_panel.setFixedHeight(38)
+        sound_layout = QHBoxLayout(sound_panel)
+        sound_layout.setContentsMargins(8, 5, 10, 5)
+        sound_layout.setSpacing(8)
+
+        self.mute_btn = QPushButton("🔊")
+        self.mute_btn.setObjectName("muteBtn")
+        self.mute_btn.setCheckable(True)
+        self.mute_btn.setChecked(False)
+        self.mute_btn.setFixedSize(30, 26)
+        self.mute_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.mute_btn.setToolTip("Mute Sound Effects")
+        self.mute_btn.toggled.connect(self._on_mute_toggled)
+        sound_layout.addWidget(self.mute_btn)
+
+        default_vol_pct = int(round(DEFAULT_VOLUME * 100))
+        self.volume_slider = QSlider(Qt.Orientation.Horizontal)
+        self.volume_slider.setObjectName("volumeSlider")
+        self.volume_slider.setRange(0, 100)
+        self.volume_slider.setSingleStep(5)
+        self.volume_slider.setPageStep(10)
+        self.volume_slider.setValue(default_vol_pct)
+        self.volume_slider.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.volume_slider.setToolTip("Adjust Sound Effects Volume")
+        self.volume_slider.sliderPressed.connect(self._on_volume_slider_pressed)
+        self.volume_slider.actionTriggered.connect(self._on_volume_slider_action)
+        self.volume_slider.valueChanged.connect(self._on_volume_slider_changed)
+        self.volume_slider.sliderReleased.connect(self._on_volume_slider_released)
+        sound_layout.addWidget(self.volume_slider, stretch=1)
+
+        self.volume_label = QLabel(f"{default_vol_pct}%")
+        self.volume_label.setObjectName("volumeValueLabel")
+        self.volume_label.setFixedWidth(34)
+        self.volume_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        sound_layout.addWidget(self.volume_label)
+
+        sidebar_layout.addWidget(sound_panel)
+
         # Action buttons
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(6)
@@ -2167,6 +2216,95 @@ class AquaChessWindow(QMainWindow):
         self.new_game()
 
     # ------------------------------------------------------------------
+    # Sound & Volume UI Handlers
+    # ------------------------------------------------------------------
+    def _on_mute_toggled(self, checked: bool):
+        """Toggle sound mute state from the sidebar mute icon button."""
+        if not checked and self.volume_slider.value() == 0:
+            default_pct = int(round(DEFAULT_VOLUME * 100))
+            self.volume_slider.blockSignals(True)
+            self.volume_slider.setValue(default_pct)
+            self.volume_slider.blockSignals(False)
+            self.sound_manager.set_volume(DEFAULT_VOLUME)
+        self.sound_manager.set_muted(checked)
+        self._update_sound_controls_ui()
+
+    def _on_volume_slider_pressed(self):
+        """Track active handle dragging to defer preview playback until release."""
+        self._is_slider_dragging = True
+        self._slider_preview_timer.stop()
+
+    def _on_volume_slider_action(self, action: int):
+        """Schedule a preview tap on non-drag user steps (groove click, wheel, keys)."""
+        if not self._is_slider_dragging:
+            self._slider_preview_timer.start(80)
+
+    def _on_volume_slider_changed(self, value: int):
+        """Update master volume and UI readout immediately when slider changes."""
+        self.sound_manager.set_volume(value / 100.0)
+        if value > 0 and self.sound_manager.muted:
+            self.sound_manager.set_muted(False)
+        self._update_sound_controls_ui()
+
+    def _on_volume_slider_released(self):
+        """Play a preview move tap when the user releases the volume slider."""
+        self._is_slider_dragging = False
+        self._slider_preview_timer.stop()
+        self._play_volume_preview()
+
+    def _play_volume_preview(self):
+        """Play a single move tap so the user can gauge the adjusted volume."""
+        if not self.sound_manager.muted and self.sound_manager.volume > 0.0:
+            self.sound_manager.play("move")
+
+    def _update_sound_controls_ui(self):
+        """Keep mute icon, checked state, and percentage readout synchronized."""
+        vol_pct = self.volume_slider.value()
+        is_muted = self.sound_manager.muted
+        self.mute_btn.blockSignals(True)
+        self.mute_btn.setChecked(is_muted)
+        self.mute_btn.blockSignals(False)
+
+        if is_muted or vol_pct == 0:
+            self.mute_btn.setText("🔇")
+            self.mute_btn.setToolTip("Unmute Sound Effects" if is_muted else "Sound Volume 0%")
+        elif vol_pct < 35:
+            self.mute_btn.setText("🔉")
+            self.mute_btn.setToolTip("Mute Sound Effects")
+        else:
+            self.mute_btn.setText("🔊")
+            self.mute_btn.setToolTip("Mute Sound Effects")
+
+        self.volume_label.setText(f"{vol_pct}%")
+        self.volume_label.setStyleSheet(
+            "color: rgba(224, 242, 241, 0.45);" if is_muted else "color: #E0F2F1;"
+        )
+
+    def _extract_move_flags(self, move: chess.Move) -> dict[str, bool]:
+        """Inspect pre-push board flags needed to classify move audio."""
+        return {
+            "is_capture": self.board.is_capture(move),
+            "is_special": self.board.is_castling(move) or (move.promotion is not None),
+        }
+
+    def _play_turn_sound(self, move_flags: dict[str, bool] | None):
+        """Trigger exactly one coastal sound effect for the completed ply."""
+        outcome = self.board.outcome()
+        is_game_over = outcome is not None
+        is_victory = bool(
+            outcome is not None
+            and outcome.termination == chess.Termination.CHECKMATE
+            and outcome.winner == self.player_color
+        )
+        self.sound_manager.play_move_outcome(
+            is_capture=bool(move_flags and move_flags.get("is_capture", False)),
+            is_special=bool(move_flags and move_flags.get("is_special", False)),
+            is_check=self.board.is_check(),
+            is_game_over=is_game_over,
+            is_victory=is_victory,
+        )
+
+    # ------------------------------------------------------------------
     # Game actions and Animation / AI Orchestration
     # ------------------------------------------------------------------
     def on_player_move(self, move: chess.Move):
@@ -2175,6 +2313,9 @@ class AquaChessWindow(QMainWindow):
             return
 
         self.set_busy_state(True)
+
+        # Capture pre-push move attributes for audio classification
+        move_flags = self._extract_move_flags(move)
 
         # Check whether this move concludes the game
         board_copy = copy.deepcopy(self.board)
@@ -2189,7 +2330,7 @@ class AquaChessWindow(QMainWindow):
         # Smoothly animate the player's piece movement
         self.chess_board.animate_and_push_move(
             move,
-            on_finished=lambda: self._on_player_move_finished(game_ends)
+            on_finished=lambda flags=move_flags: self._on_player_move_finished(game_ends, flags)
         )
 
     def _start_ai_search(self, board_copy: chess.Board):
@@ -2209,11 +2350,12 @@ class AquaChessWindow(QMainWindow):
         )
         self.ai_worker.start()
 
-    def _on_player_move_finished(self, game_ends: bool):
+    def _on_player_move_finished(self, game_ends: bool, move_flags: dict[str, bool] | None = None):
         """Called when player piece movement animation completes."""
         self.update_move_history()
         self.update_captured_pieces()
         self.eval_bar.set_eval(self.engine.evaluate(self.board))
+        self._play_turn_sound(move_flags)
 
         if self.check_game_over():
             self.set_busy_state(False)
@@ -2261,8 +2403,9 @@ class AquaChessWindow(QMainWindow):
             self.check_game_over()
             return
 
-        # Record SAN before pushing the move
+        # Record SAN and pre-push move attributes before pushing the move
         san = self.board.san(move)
+        move_flags = self._extract_move_flags(move)
         self.last_eval = eval_score
         self.eval_bar.set_eval(eval_score)
         self.status_label.setText(f"AI plays {san} 🌊")
@@ -2270,13 +2413,14 @@ class AquaChessWindow(QMainWindow):
         # Smoothly animate AI piece movement
         self.chess_board.animate_and_push_move(
             move,
-            on_finished=lambda: self._on_ai_move_finished(san)
+            on_finished=lambda s=san, flags=move_flags: self._on_ai_move_finished(s, flags)
         )
 
-    def _on_ai_move_finished(self, san: str):
+    def _on_ai_move_finished(self, san: str, move_flags: dict[str, bool] | None = None):
         """Called when AI move animation finishes."""
         self.update_move_history()
         self.update_captured_pieces()
+        self._play_turn_sound(move_flags)
 
         if self.check_game_over():
             self.set_busy_state(False)

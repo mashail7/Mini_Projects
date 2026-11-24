@@ -601,6 +601,77 @@ QPushButton:disabled {
     color: rgba(255, 255, 255, 0.50);
 }
 
+/* --- Sound Controls (Coastal Sea-Glass Bar) --- */
+QFrame#soundPanel {
+    background-color: rgba(7, 26, 36, 0.62);
+    border: 1px solid rgba(128, 255, 219, 0.24);
+    border-radius: 9px;
+}
+QPushButton#muteBtn {
+    background-color: rgba(42, 157, 143, 0.30);
+    color: #FFFDF9;
+    border: 1px solid rgba(128, 255, 219, 0.40);
+    border-radius: 6px;
+    padding: 0px;
+    min-height: 24px;
+    font-size: 13px;
+}
+QPushButton#muteBtn:hover {
+    background-color: rgba(42, 157, 143, 0.52);
+    border-color: #80FFDB;
+}
+QPushButton#muteBtn:pressed {
+    background-color: rgba(29, 120, 116, 0.70);
+}
+QPushButton#muteBtn:checked {
+    background-color: rgba(231, 111, 81, 0.25);
+    color: #F4A261;
+    border: 1px solid rgba(231, 111, 81, 0.60);
+}
+QPushButton#muteBtn:checked:hover {
+    background-color: rgba(231, 111, 81, 0.40);
+    border-color: #E76F51;
+}
+QSlider#volumeSlider {
+    background: transparent;
+    min-height: 20px;
+}
+QSlider#volumeSlider::groove:horizontal {
+    height: 6px;
+    background: rgba(7, 26, 36, 0.85);
+    border: 1px solid rgba(128, 255, 219, 0.22);
+    border-radius: 3px;
+}
+QSlider#volumeSlider::sub-page:horizontal {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 #2A9D8F, stop:1 #80FFDB);
+    border: 1px solid rgba(128, 255, 219, 0.35);
+    border-radius: 3px;
+}
+QSlider#volumeSlider::add-page:horizontal {
+    background: rgba(7, 26, 36, 0.85);
+    border: 1px solid rgba(128, 255, 219, 0.18);
+    border-radius: 3px;
+}
+QSlider#volumeSlider::handle:horizontal {
+    background: #FFFDF9;
+    border: 2px solid #E76F51;
+    width: 14px;
+    height: 14px;
+    margin: -5px 0;
+    border-radius: 8px;
+}
+QSlider#volumeSlider::handle:horizontal:hover {
+    background: #F4A261;
+    border-color: #FFFDF9;
+}
+QLabel#volumeValueLabel {
+    color: #E0F2F1;
+    font-size: 11px;
+    font-weight: bold;
+    background: transparent;
+}
+
 /* --- Combo Boxes --- */
 QComboBox {
     background-color: rgba(7, 26, 36, 0.85);
