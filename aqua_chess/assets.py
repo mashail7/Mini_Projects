@@ -485,9 +485,11 @@ QWidget#centralArea {
 
 /* --- Sidebar: Frosted Sea-Glass --- */
 QWidget#sidebar {
-    background: rgba(10, 38, 54, 0.68);
-    border: 1px solid rgba(128, 255, 219, 0.35);
-    border-radius: 14px;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop: 0 rgba(12, 48, 66, 0.74),
+        stop: 1 rgba(8, 30, 44, 0.78));
+    border: 1.5px solid rgba(145, 235, 248, 0.36);
+    border-radius: 16px;
 }
 
 /* --- Glassmorphism Group Boxes (cards) --- */
@@ -562,7 +564,7 @@ QLabel#capturedLabel {
     min-height: 20px;
 }
 
-/* --- Buttons (Coral Accent) --- */
+/* --- Buttons (Coral-Sunset Aqua-Glass) --- */
 QPushButton {
     background-color: #E76F51;
     color: #FFFFFF;
@@ -573,23 +575,6 @@ QPushButton {
     font-weight: bold;
     min-height: 22px;
 }
-QPushButton#actionBtn {
-    background-color: #E76F51;
-    color: #FFFFFF;
-    border: 1px solid rgba(255, 255, 255, 0.20);
-    border-radius: 8px;
-    padding: 7px 6px;
-    font-size: 11px;
-    font-weight: bold;
-    min-height: 22px;
-}
-QPushButton#actionBtn:hover {
-    background-color: #D4573D;
-    border-color: rgba(128, 255, 219, 0.45);
-}
-QPushButton#actionBtn:pressed {
-    background-color: #C04B33;
-}
 QPushButton:hover {
     background-color: #D4573D;
 }
@@ -599,6 +584,49 @@ QPushButton:pressed {
 QPushButton:disabled {
     background-color: rgba(231, 111, 81, 0.40);
     color: rgba(255, 255, 255, 0.50);
+}
+QPushButton#actionBtn {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop: 0.00 #FFB199,
+        stop: 0.12 #FF8E72,
+        stop: 0.52 #EC6A4E,
+        stop: 0.92 #C94931,
+        stop: 1.00 #DF6853);
+    color: #FFFFFF;
+    border: 1.5px solid rgba(255, 255, 255, 0.55);
+    border-radius: 13px;
+    padding: 0px 10px;
+    min-height: 48px;
+    font-family: "Segoe UI", sans-serif;
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+}
+QPushButton#actionBtn:hover {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop: 0.00 #FFC2AE,
+        stop: 0.14 #FFA087,
+        stop: 0.54 #F4765A,
+        stop: 0.92 #D3533B,
+        stop: 1.00 #EB7A63);
+    border: 1.5px solid rgba(255, 255, 255, 0.90);
+}
+QPushButton#actionBtn:pressed {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop: 0.00 #B83E28,
+        stop: 0.20 #C2452E,
+        stop: 0.72 #D15037,
+        stop: 1.00 #D9583E);
+    border: 1.5px solid rgba(255, 255, 255, 0.45);
+    padding: 2px 10px 0px 10px;
+    min-height: 46px;
+}
+QPushButton#actionBtn:disabled {
+    background: rgba(180, 110, 98, 0.38);
+    border: 1.5px solid rgba(255, 255, 255, 0.22);
+    color: rgba(255, 255, 255, 0.45);
+    padding: 0px 10px;
+    min-height: 48px;
 }
 
 /* --- Sound Controls (Coastal Sea-Glass Bar) --- */
@@ -672,39 +700,83 @@ QLabel#volumeValueLabel {
     background: transparent;
 }
 
-/* --- Combo Boxes --- */
+/* --- Combo Boxes (Aqua-Glass Dropdowns) --- */
 QComboBox {
-    background-color: rgba(7, 26, 36, 0.85);
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop: 0.00 rgba(48, 148, 168, 0.55),
+        stop: 0.18 rgba(18, 68, 84, 0.78),
+        stop: 0.85 rgba(12, 48, 62, 0.85),
+        stop: 1.00 rgba(42, 135, 155, 0.50));
     color: #FFFFFF;
-    border: 1px solid rgba(128, 255, 219, 0.30);
-    border-radius: 6px;
-    padding: 5px 10px;
-    font-size: 12px;
-    min-height: 22px;
+    border: 1.5px solid rgba(145, 235, 248, 0.60);
+    border-radius: 12px;
+    padding: 0px 14px;
+    min-height: 44px;
+    font-family: "Segoe UI", sans-serif;
+    font-size: 13px;
+    font-weight: 600;
 }
-QComboBox:hover {
-    border: 1px solid #E76F51;
+QComboBox:hover,
+QComboBox:on {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop: 0.00 rgba(72, 182, 204, 0.66),
+        stop: 0.18 rgba(22, 82, 102, 0.82),
+        stop: 0.85 rgba(14, 56, 72, 0.88),
+        stop: 1.00 rgba(54, 156, 178, 0.58));
+    border: 1.5px solid rgba(145, 235, 248, 0.92);
+}
+QComboBox:disabled {
+    background: rgba(14, 52, 66, 0.48);
+    border: 1.5px solid rgba(145, 235, 248, 0.24);
+    color: rgba(255, 255, 255, 0.45);
 }
 QComboBox::drop-down {
     subcontrol-origin: padding;
     subcontrol-position: top right;
-    width: 24px;
-    border-left: 1px solid rgba(128, 255, 219, 0.18);
-    border-top-right-radius: 6px;
-    border-bottom-right-radius: 6px;
+    width: 34px;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop: 0.00 rgba(145, 235, 248, 0.14),
+        stop: 1.00 rgba(145, 235, 248, 0.04));
+    border-left: 1px solid rgba(145, 235, 248, 0.28);
+    border-top-right-radius: 10px;
+    border-bottom-right-radius: 10px;
+}
+QComboBox::drop-down:hover {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop: 0.00 rgba(145, 235, 248, 0.24),
+        stop: 1.00 rgba(72, 202, 228, 0.10));
 }
 QComboBox::down-arrow {
-    width: 10px;
-    height: 10px;
+    image: none;
+    width: 0px;
+    height: 0px;
+}
+QFrame#aquaComboPopup {
+    background: transparent;
+    border: none;
 }
 QComboBox QAbstractItemView {
-    background-color: rgba(7, 26, 36, 0.95);
+    background-color: rgba(9, 40, 54, 0.96);
     color: #FFFFFF;
-    selection-background-color: #E76F51;
+    border: 1.5px solid rgba(145, 235, 248, 0.55);
+    border-radius: 10px;
+    padding: 5px;
+    selection-background-color: rgba(72, 202, 228, 0.35);
     selection-color: #FFFFFF;
-    border: 1px solid rgba(128, 255, 219, 0.25);
-    border-radius: 4px;
     outline: none;
+    font-family: "Segoe UI", sans-serif;
+    font-size: 13px;
+    font-weight: 500;
+}
+QComboBox QAbstractItemView::item {
+    min-height: 32px;
+    padding: 4px 10px;
+    border-radius: 7px;
+}
+QComboBox QAbstractItemView::item:hover,
+QComboBox QAbstractItemView::item:selected {
+    background-color: rgba(72, 202, 228, 0.35);
+    color: #FFFFFF;
 }
 
 /* --- Table Widget (Move History) --- */

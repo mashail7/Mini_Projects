@@ -12,7 +12,7 @@ import chess
 
 from PySide6.QtCore import (
     Qt, Signal, QSize, QByteArray, QRectF, QRect, QPointF, QPoint, QThread,
-    QVariantAnimation, QEasingCurve, QTimer,
+    QVariantAnimation, QEasingCurve, QTimer, QEvent,
 )
 from PySide6.QtGui import (
     QPainter, QColor, QFont, QLinearGradient, QRadialGradient, QPen, QBrush,
@@ -22,6 +22,8 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
     QComboBox, QLabel, QTableWidget, QTableWidgetItem, QDialog,
     QSizePolicy, QHeaderView, QAbstractItemView, QFrame, QSlider,
+    QGraphicsDropShadowEffect, QStyledItemDelegate, QListView, QStyle,
+    QStyleOptionComboBox,
 )
 from PySide6.QtSvg import QSvgRenderer
 
@@ -1971,6 +1973,102 @@ class CentralBackground(QWidget):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Aqua-Glass Sidebar Controls (Combo Boxes & Action Buttons)
+# ═══════════════════════════════════════════════════════════════════════════
+class _AquaComboItemDelegate(QStyledItemDelegate):
+    """Styled item delegate ensuring consistent row height in aqua dropdowns."""
+
+    def sizeHint(self, option, index) -> QSize:
+        sh = super().sizeHint(option, index)
+        return QSize(sh.width(), max(sh.height(), 36))
+
+
+class AquaComboBox(QComboBox):
+    """Glossy aqua-glass combo box with crisp vector chevron and translucent popup."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        # Use QListView + QStyledItemDelegate so QSS item hover/selection states render reliably
+        view = QListView(self)
+        view.setMouseTracking(True)
+        self.setView(view)
+        self.setItemDelegate(_AquaComboItemDelegate(self))
+
+        # Enable true rounded translucent corners on the popup frame
+        popup = view.window()
+        popup.setObjectName("aquaComboPopup")
+        if isinstance(popup, QFrame):
+            popup.setFrameShape(QFrame.Shape.NoFrame)
+        popup.setAutoFillBackground(False)
+        popup.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        popup.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
+        popup.setWindowFlag(Qt.WindowType.NoDropShadowWindowHint, True)
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.EnabledChange:
+            self.setCursor(
+                Qt.CursorShape.PointingHandCursor if self.isEnabled() else Qt.CursorShape.ArrowCursor
+            )
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        opt = QStyleOptionComboBox()
+        self.initStyleOption(opt)
+        dd_rect = self.style().subControlRect(
+            QStyle.ComplexControl.CC_ComboBox,
+            opt,
+            QStyle.SubControl.SC_ComboBoxArrow,
+            self,
+        )
+        if not dd_rect.isValid() or dd_rect.width() <= 0:
+            dd_rect = self.rect().adjusted(max(0, self.width() - 34), 0, 0, 0)
+
+        cx = dd_rect.center().x() + 0.5
+        cy = dd_rect.center().y() + 0.5
+
+        if not self.isEnabled():
+            chevron_color = QColor(255, 255, 255, 110)
+        elif self.underMouse() or self.view().isVisible():
+            chevron_color = QColor(255, 255, 255, 245)
+        else:
+            chevron_color = QColor(220, 250, 255, 235)
+
+        chevron = QPainterPath()
+        chevron.moveTo(cx - 5.0, cy - 2.2)
+        chevron.lineTo(cx, cy + 3.0)
+        chevron.lineTo(cx + 5.0, cy - 2.2)
+
+        pen = QPen(
+            chevron_color,
+            2.0,
+            Qt.PenStyle.SolidLine,
+            Qt.PenCapStyle.RoundCap,
+            Qt.PenJoinStyle.RoundJoin,
+        )
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawPath(chevron)
+        painter.end()
+
+
+class _AquaActionButton(QPushButton):
+    """Tactile coral-glass action button that adapts cursor cleanly on enable changes."""
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.EnabledChange:
+            self.setCursor(
+                Qt.CursorShape.PointingHandCursor if self.isEnabled() else Qt.CursorShape.ArrowCursor
+            )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # AquaChessWindow — main application window
 # ═══════════════════════════════════════════════════════════════════════════
 class AquaChessWindow(QMainWindow):
@@ -1979,7 +2077,8 @@ class AquaChessWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Aqua Chess 🌊")
-        self.setMinimumSize(900, 650)
+        self.setMinimumSize(1000, 650)
+        self.resize(1060, 720)
 
         # --- core state ---
         self.board = chess.Board()
@@ -2047,11 +2146,14 @@ class AquaChessWindow(QMainWindow):
 
         # ---- sidebar (right) ----
         sidebar = QWidget()
-        sidebar.setFixedWidth(280)
         sidebar.setObjectName("sidebar")
+        sidebar.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        sidebar.setMinimumWidth(376)
+        sidebar.setMaximumWidth(420)
+        sidebar.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         sidebar_layout = QVBoxLayout(sidebar)
-        sidebar_layout.setContentsMargins(12, 14, 12, 12)
-        sidebar_layout.setSpacing(10)
+        sidebar_layout.setContentsMargins(14, 14, 14, 18)
+        sidebar_layout.setSpacing(9)
 
         # Title & Subtitle
         title_label = QLabel("🌊 Aqua Chess")
@@ -2070,7 +2172,7 @@ class AquaChessWindow(QMainWindow):
         diff_label = QLabel("Difficulty")
         diff_label.setObjectName("sectionLabel")
         sidebar_layout.addWidget(diff_label)
-        self.difficulty_combo = QComboBox()
+        self.difficulty_combo = AquaComboBox()
         self.difficulty_combo.addItems([
             "🌴 Beach Breeze (Easy)",
             "🌊 High Tide (Medium)",
@@ -2085,7 +2187,7 @@ class AquaChessWindow(QMainWindow):
         color_label = QLabel("Play As")
         color_label.setObjectName("sectionLabel")
         sidebar_layout.addWidget(color_label)
-        self.color_combo = QComboBox()
+        self.color_combo = AquaComboBox()
         self.color_combo.addItems(["⬜ Play as White", "⬛ Play as Black"])
         self.color_combo.setObjectName("colorCombo")
         self.color_combo.currentIndexChanged.connect(self._on_color_changed)
@@ -2166,22 +2268,17 @@ class AquaChessWindow(QMainWindow):
 
         # Action buttons
         btn_layout = QHBoxLayout()
-        btn_layout.setSpacing(6)
+        btn_layout.setContentsMargins(0, 4, 0, 0)
+        btn_layout.setSpacing(10)
 
-        self.new_game_btn = QPushButton("🆕 New Game")
-        self.new_game_btn.setObjectName("actionBtn")
-        self.new_game_btn.clicked.connect(self.new_game)
-        btn_layout.addWidget(self.new_game_btn)
+        self.new_game_btn = self._create_action_button("New Game", self.new_game)
+        btn_layout.addWidget(self.new_game_btn, 1)
 
-        self.undo_btn = QPushButton("↩️ Undo Move")
-        self.undo_btn.setObjectName("actionBtn")
-        self.undo_btn.clicked.connect(self.undo_move)
-        btn_layout.addWidget(self.undo_btn)
+        self.undo_btn = self._create_action_button("Undo Move", self.undo_move)
+        btn_layout.addWidget(self.undo_btn, 1)
 
-        self.flip_btn = QPushButton("🔄 Flip Board")
-        self.flip_btn.setObjectName("actionBtn")
-        self.flip_btn.clicked.connect(self.flip_board)
-        btn_layout.addWidget(self.flip_btn)
+        self.flip_btn = self._create_action_button("Flip Board", self.flip_board)
+        btn_layout.addWidget(self.flip_btn, 1)
 
         sidebar_layout.addLayout(btn_layout)
 
@@ -2189,6 +2286,22 @@ class AquaChessWindow(QMainWindow):
 
         # --- initial display ---
         self.update_display()
+
+    def _create_action_button(self, label: str, on_clicked) -> QPushButton:
+        """Build a glossy coral-glass sidebar action button with drop shadow."""
+        btn = _AquaActionButton(label)
+        btn.setObjectName("actionBtn")
+        btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        shadow = QGraphicsDropShadowEffect(btn)
+        shadow.setBlurRadius(14)
+        shadow.setOffset(0, 4)
+        shadow.setColor(QColor(8, 28, 38, 130))
+        btn.setGraphicsEffect(shadow)
+
+        btn.clicked.connect(on_clicked)
+        return btn
 
     def set_busy_state(self, busy: bool):
         """Update UI interaction state when busy animating or during AI turns."""
