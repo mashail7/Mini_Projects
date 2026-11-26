@@ -546,6 +546,71 @@ QLabel#bannerStatusLabel {
     border: none;
     padding: 0;
 }
+
+/* --- Post-Game Inspect Controls (inside TurnIndicatorBanner) --- */
+QFrame#inspectDivider {
+    background-color: rgba(128, 255, 219, 0.28);
+    border: none;
+}
+QPushButton#inspectResultsBtn {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop: 0.00 rgba(42, 157, 143, 0.45),
+        stop: 1.00 rgba(19, 80, 91, 0.72));
+    color: #A7F3D0;
+    border: 1.5px solid rgba(128, 255, 219, 0.55);
+    border-radius: 10px;
+    padding: 6px 14px;
+    min-height: 18px;
+    font-family: "Segoe UI", sans-serif;
+    font-size: 12px;
+    font-weight: 700;
+}
+QPushButton#inspectResultsBtn:hover {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop: 0.00 rgba(56, 189, 173, 0.65),
+        stop: 1.00 rgba(29, 120, 116, 0.88));
+    border: 1.5px solid #80FFDB;
+    color: #FFFFFF;
+}
+QPushButton#inspectResultsBtn:pressed {
+    background: rgba(13, 62, 70, 0.92);
+    border: 1.5px solid rgba(128, 255, 219, 0.45);
+    padding: 7px 14px 5px 14px;
+}
+QPushButton#inspectNewGameBtn {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop: 0.00 #FFB199,
+        stop: 0.14 #FF8E72,
+        stop: 0.54 #EC6A4E,
+        stop: 0.94 #C94931,
+        stop: 1.00 #DF6853);
+    color: #FFFFFF;
+    border: 1.5px solid rgba(255, 255, 255, 0.55);
+    border-radius: 10px;
+    padding: 6px 14px;
+    min-height: 18px;
+    font-family: "Segoe UI", sans-serif;
+    font-size: 12px;
+    font-weight: 700;
+}
+QPushButton#inspectNewGameBtn:hover {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop: 0.00 #FFC2AE,
+        stop: 0.14 #FFA087,
+        stop: 0.54 #F4765A,
+        stop: 0.94 #D3533B,
+        stop: 1.00 #EB7A63);
+    border: 1.5px solid rgba(255, 255, 255, 0.92);
+}
+QPushButton#inspectNewGameBtn:pressed {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop: 0.00 #B83E28,
+        stop: 0.25 #C2452E,
+        stop: 0.75 #D15037,
+        stop: 1.00 #D9583E);
+    border: 1.5px solid rgba(255, 255, 255, 0.45);
+    padding: 7px 14px 5px 14px;
+}
 QLabel#sectionLabel {
     font-size: 11px;
     font-weight: bold;

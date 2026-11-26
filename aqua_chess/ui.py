@@ -326,6 +326,45 @@ class EvalBar(QWidget):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Crisp Vector UI Icons (HiDPI QSvgRenderer helpers)
+# ═══════════════════════════════════════════════════════════════════════════
+_ICON_RESULTS_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <path d="M7 4H17V10C17 12.76 14.76 15 12 15C9.24 15 7 12.76 7 10V4Z" fill="#FFD166" fill-opacity="0.22" stroke="#FFD166" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M7 6H4.5C3.67 6 3 6.67 3 7.5V8.5C3 10.16 4.34 11.5 6 11.5H7" stroke="#FFD166" stroke-width="1.8" stroke-linecap="round"/>
+  <path d="M17 6H19.5C20.33 6 21 6.67 21 7.5V8.5C21 10.16 19.66 11.5 18 11.5H17" stroke="#FFD166" stroke-width="1.8" stroke-linecap="round"/>
+  <line x1="12" y1="15" x2="12" y2="19" stroke="#80FFDB" stroke-width="2" stroke-linecap="round"/>
+  <path d="M8 20H16" stroke="#80FFDB" stroke-width="2.2" stroke-linecap="round"/>
+</svg>'''
+
+_ICON_NEW_GAME_SVG = '''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <path d="M20 12A8 8 0 1 1 17.66 6.34" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round"/>
+  <path d="M20 4V9H15" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>'''
+
+
+def _render_svg_pixmap(svg_data: str, logical_size: int = 16, dpr: float = 2.0) -> QPixmap:
+    """Render an inline SVG string into a crisp HiDPI QPixmap."""
+    phys = max(1, int(round(logical_size * dpr)))
+    pix = QPixmap(phys, phys)
+    pix.setDevicePixelRatio(dpr)
+    pix.fill(Qt.GlobalColor.transparent)
+    renderer = QSvgRenderer(QByteArray(svg_data.encode("utf-8")))
+    painter = QPainter(pix)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    renderer.render(painter, QRectF(0, 0, logical_size, logical_size))
+    painter.end()
+    return pix
+
+
+def _render_svg_icon(svg_data: str, logical_size: int = 16) -> QIcon:
+    """Build a multi-DPI QIcon from an inline SVG string."""
+    icon = QIcon()
+    for dpr in (1.0, 2.0):
+        icon.addPixmap(_render_svg_pixmap(svg_data, logical_size, dpr))
+    return icon
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # GameOverOverlay — large, high-impact victory and end-of-game announcement
 # ═══════════════════════════════════════════════════════════════════════════
 class GameOverOverlay(QWidget):
@@ -336,6 +375,7 @@ class GameOverOverlay(QWidget):
     a clear "Play Again" button, and an "Inspect Board" mode to study the final state.
     """
     play_again_clicked = Signal()
+    inspect_mode_changed = Signal(bool)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -411,48 +451,12 @@ class GameOverOverlay(QWidget):
         self.inspect_btn.setMinimumWidth(140)
         self.inspect_btn.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
         self.inspect_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.inspect_btn.setToolTip("Hide summary to inspect the final board")
         self.inspect_btn.clicked.connect(self.toggle_inspect_mode)
         btn_layout.addWidget(self.inspect_btn)
 
         card_layout.addLayout(btn_layout)
         self.main_layout.addWidget(self.card, alignment=Qt.AlignmentFlag.AlignCenter)
-
-        # --- Pinned Inspect Banner (only visible in inspect mode) ---
-        self.inspect_pill = QFrame(self)
-        self.inspect_pill.setObjectName("inspectPill")
-        self.inspect_pill.setFixedHeight(40)
-        pill_layout = QHBoxLayout(self.inspect_pill)
-        pill_layout.setContentsMargins(14, 4, 14, 4)
-        pill_layout.setSpacing(10)
-        pill_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        self.pill_summary_label = QLabel(self.inspect_pill)
-        self.pill_summary_label.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
-        self.pill_summary_label.setStyleSheet("color: #FFFDF9; background: transparent;")
-        pill_layout.addWidget(self.pill_summary_label)
-
-        self.pill_show_card_btn = QPushButton("📊 Show Result", self.inspect_pill)
-        self.pill_show_card_btn.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
-        self.pill_show_card_btn.setFixedHeight(28)
-        self.pill_show_card_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.pill_show_card_btn.setStyleSheet(
-            "background: rgba(128, 255, 219, 0.20); color: #80FFDB; "
-            "border: 1px solid rgba(128, 255, 219, 0.50); border-radius: 6px; padding: 2px 10px;"
-        )
-        self.pill_show_card_btn.clicked.connect(self.toggle_inspect_mode)
-        pill_layout.addWidget(self.pill_show_card_btn)
-
-        self.pill_play_again_btn = QPushButton("🌊 Play Again", self.inspect_pill)
-        self.pill_play_again_btn.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
-        self.pill_play_again_btn.setFixedHeight(28)
-        self.pill_play_again_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.pill_play_again_btn.setStyleSheet(
-            "background: #E76F51; color: #FFFFFF; border: none; border-radius: 6px; padding: 2px 10px;"
-        )
-        self.pill_play_again_btn.clicked.connect(self._on_play_again)
-        pill_layout.addWidget(self.pill_play_again_btn)
-
-        self.inspect_pill.hide()
 
         self._apply_card_styles()
         self.hide()
@@ -461,13 +465,7 @@ class GameOverOverlay(QWidget):
         """Update size and position relative to parent chessboard."""
         if not self.parent():
             return
-        p_w = self.parent().width()
-        p_h = self.parent().height()
-        if self.is_inspect_mode:
-            pill_w = min(460, p_w - 20)
-            self.setGeometry(int((p_w - pill_w) / 2), 6, pill_w, 42)
-        else:
-            self.setGeometry(0, 0, p_w, p_h)
+        self.setGeometry(0, 0, self.parent().width(), self.parent().height())
 
     def show_game_over(self, winner: chess.Color | None, title: str, subtitle: str, is_draw: bool = False):
         self.winner = winner
@@ -478,7 +476,6 @@ class GameOverOverlay(QWidget):
 
         self.title_label.setText(title)
         self.subtitle_label.setText(f"— {subtitle} —")
-        self.pill_summary_label.setText(f"🏆 {title} ({subtitle})")
 
         if is_draw:
             self.emblem_label.setText("🌊")
@@ -489,24 +486,31 @@ class GameOverOverlay(QWidget):
 
         self._apply_card_styles()
         self.card.show()
-        self.inspect_pill.hide()
         self.update_geometry()
         self.show()
         self.raise_()
+        self.inspect_mode_changed.emit(False)
 
-    def toggle_inspect_mode(self):
-        self.is_inspect_mode = not self.is_inspect_mode
-        self.update_geometry()
-        if self.is_inspect_mode:
-            self.card.hide()
-            self.inspect_pill.show()
+    def set_inspect_mode(self, inspect: bool):
+        """Switch between full victory card overlay and unobstructed board inspection."""
+        inspect = bool(inspect)
+        self.is_inspect_mode = inspect
+        if inspect:
+            self.hide()
         else:
             self.card.show()
-            self.inspect_pill.hide()
-        self.update()
+            self.update_geometry()
+            self.show()
+            self.raise_()
+        self.inspect_mode_changed.emit(inspect)
+
+    def toggle_inspect_mode(self):
+        self.set_inspect_mode(not self.is_inspect_mode)
 
     def _on_play_again(self):
+        self.is_inspect_mode = False
         self.hide()
+        self.inspect_mode_changed.emit(False)
         self.play_again_clicked.emit()
 
     def _apply_card_styles(self):
@@ -571,13 +575,6 @@ class GameOverOverlay(QWidget):
             "  border-color: #80FFDB;"
             "  color: #FFFFFF;"
             "}"
-        )
-        self.inspect_pill.setStyleSheet(
-            f"QFrame#inspectPill {{"
-            f"  background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 rgba(7,26,36,0.92), stop:1 rgba(13,44,62,0.95));"
-            f"  border: 1.5px solid {border_color};"
-            f"  border-radius: 12px;"
-            f"}}"
         )
 
     def paintEvent(self, event):
@@ -679,6 +676,7 @@ class ChessBoard(QWidget):
         if hasattr(self, "game_over_overlay") and self.game_over_overlay is not None:
             self.game_over_overlay.is_inspect_mode = False
             self.game_over_overlay.hide()
+            self.game_over_overlay.inspect_mode_changed.emit(False)
 
     def _on_anim_value_changed(self, value):
         self.anim_progress = float(value)
@@ -1459,14 +1457,21 @@ class TurnIndicatorBanner(QWidget):
     Dedicated, prominent status banner / pill widget positioned directly above the chessboard.
     Displays active side (White / Black), player vs AI turn, check alerts, and victory announcements
     with bold typography (16pt-18pt) and luxury beach/ocean glassmorphism styling.
+
+    In post-game Inspect Board mode, seamlessly swaps its right-hand state chip for
+    clearly labeled "Results" and "New Game" action buttons within the same fixed height
+    so the chessboard maintains its exact geometry with zero layout shift.
     """
+
+    results_clicked = Signal()
+    new_game_clicked = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("turnBanner")
         self.setFixedHeight(56)
         self.setMinimumWidth(380)
-        self.setMaximumWidth(680)
+        self.setMaximumWidth(740)
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
 
         self.color: chess.Color = chess.WHITE
@@ -1475,38 +1480,163 @@ class TurnIndicatorBanner(QWidget):
         self.is_ai_thinking: bool = False
         self.is_game_over: bool = False
         self.is_draw: bool = False
+        self.is_inspect_mode: bool = False
+        self._raw_status_text: str = "Your Turn — White to Move"
+        self._suppress_text_sync: bool = False
+        self._status_font_pt: int = 17
 
         # Internal layout
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(18, 6, 18, 6)
-        layout.setSpacing(14)
-        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._layout = QHBoxLayout(self)
+        self._layout.setContentsMargins(18, 6, 18, 6)
+        self._layout.setSpacing(14)
+        self._layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         # Active side circular badge
         self.badge = ActiveSideBadge(self)
-        layout.addWidget(self.badge)
+        self._layout.addWidget(self.badge)
 
-        # Prominent status label (16pt bold)
+        # Prominent status label (scales smoothly from 17pt down if width is constrained)
         self.status_label = BannerStatusLabel("Your Turn — White to Move", self)
         self.status_label.setObjectName("bannerStatusLabel")
-        font = QFont("Segoe UI", 16, QFont.Weight.Bold)
-        self.status_label.setFont(font)
+        self.status_label.setFont(QFont("Segoe UI", 17, QFont.Weight.Bold))
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
-        layout.addWidget(self.status_label, stretch=1)
+        self.status_label.setMinimumWidth(0)
+        self._layout.addWidget(self.status_label, stretch=1)
 
-        # State chip / pill
+        # State chip / pill (visible during normal play & when game-over modal is open)
         self.chip = QLabel("YOUR MOVE", self)
         self.chip.setObjectName("bannerStateChip")
         chip_font = QFont("Segoe UI", 10, QFont.Weight.Bold)
         self.chip.setFont(chip_font)
         self.chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.chip.setFixedHeight(28)
-        layout.addWidget(self.chip)
+        self._layout.addWidget(self.chip)
+
+        # Integrated Post-Game Inspect Actions (visible inside banner during Inspect Board mode)
+        self.inspect_actions = QWidget(self)
+        self.inspect_actions.setObjectName("inspectActionsContainer")
+        self.inspect_actions.setStyleSheet("QWidget#inspectActionsContainer { background: transparent; border: none; }")
+        actions_layout = QHBoxLayout(self.inspect_actions)
+        actions_layout.setContentsMargins(0, 0, 0, 0)
+        actions_layout.setSpacing(8)
+        actions_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+
+        self.inspect_divider = QFrame(self.inspect_actions)
+        self.inspect_divider.setObjectName("inspectDivider")
+        self.inspect_divider.setFixedSize(1, 24)
+        actions_layout.addWidget(self.inspect_divider)
+
+        self.results_btn = QPushButton("Results", self.inspect_actions)
+        self.results_btn.setObjectName("inspectResultsBtn")
+        self.results_btn.setIcon(_render_svg_icon(_ICON_RESULTS_SVG, 15))
+        self.results_btn.setIconSize(QSize(15, 15))
+        self.results_btn.setToolTip("Reopen the match result summary")
+        self.results_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.results_btn.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+        self.results_btn.clicked.connect(self.results_clicked.emit)
+        actions_layout.addWidget(self.results_btn)
+
+        self.new_game_btn = QPushButton("New Game", self.inspect_actions)
+        self.new_game_btn.setObjectName("inspectNewGameBtn")
+        self.new_game_btn.setIcon(_render_svg_icon(_ICON_NEW_GAME_SVG, 15))
+        self.new_game_btn.setIconSize(QSize(15, 15))
+        self.new_game_btn.setToolTip("Start a fresh chess match")
+        self.new_game_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.new_game_btn.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+        self.new_game_btn.clicked.connect(self.new_game_clicked.emit)
+        actions_layout.addWidget(self.new_game_btn)
+
+        self.inspect_actions.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.inspect_actions.hide()
+        self._layout.addWidget(self.inspect_actions)
 
         self._apply_chip_style()
 
+    def minimumSizeHint(self) -> QSize:
+        return QSize(380, 56)
+
+    @staticmethod
+    def _strip_leading_emblem(text: str) -> str:
+        for prefix in ("👑 ", "🤝 "):
+            if text.startswith(prefix):
+                return text[len(prefix):]
+        return text
+
+    def _fit_status_font(self, target_width: int | None = None):
+        """Scale status_label point size down cleanly if needed so text & buttons never clip."""
+        from PySide6.QtGui import QFontMetrics
+
+        if target_width is None or target_width <= 0:
+            parent = self.parentWidget()
+            if parent is not None and parent.width() > 0:
+                target_width = min(self.maximumWidth(), parent.width())
+            elif self.width() > 0:
+                target_width = self.width()
+            else:
+                target_width = 560
+
+        margins = self._layout.contentsMargins()
+        spacing = self._layout.spacing()
+        right_widget = self.inspect_actions if self.is_inspect_mode else self.chip
+        right_w = max(right_widget.sizeHint().width(), right_widget.width())
+        reserved = margins.left() + margins.right() + self.badge.width() + right_w + spacing * 2
+        avail_label_w = max(120, target_width - reserved)
+
+        text = self.status_label.text()
+        chosen_pt = 17
+        for pt in (17, 16, 15, 14, 13, 12, 11, 10):
+            f = QFont("Segoe UI", pt, QFont.Weight.Bold)
+            if QFontMetrics(f).horizontalAdvance(text) <= avail_label_w:
+                chosen_pt = pt
+                break
+            chosen_pt = pt
+
+        if self._status_font_pt != chosen_pt:
+            self._status_font_pt = chosen_pt
+            self.status_label.setFont(QFont("Segoe UI", chosen_pt, QFont.Weight.Bold))
+            self.status_label.setStyleSheet(
+                f"font-size: {chosen_pt}pt; font-weight: bold; color: #FFFDF9; "
+                "background: transparent; border: none; padding: 0;"
+            )
+            self.status_label.updateGeometry()
+
+    def set_inspect_mode(self, inspecting: bool):
+        """Toggle integrated Results / New Game controls inside the banner."""
+        inspecting = bool(inspecting) and self.is_game_over
+        if self.is_inspect_mode == inspecting:
+            return
+        self.is_inspect_mode = inspecting
+
+        self._suppress_text_sync = True
+        try:
+            if inspecting:
+                self._layout.setContentsMargins(14, 6, 12, 6)
+                self._layout.setSpacing(10)
+                self.chip.hide()
+                self.inspect_actions.show()
+                self.status_label.setText(self._strip_leading_emblem(self._raw_status_text))
+            else:
+                self._layout.setContentsMargins(18, 6, 18, 6)
+                self._layout.setSpacing(14)
+                self.inspect_actions.hide()
+                self.chip.show()
+                self.status_label.setText(self._raw_status_text)
+        finally:
+            self._suppress_text_sync = False
+
+        self._fit_status_font()
+        self.updateGeometry()
+        self.update()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._fit_status_font(self.width())
+
     def _on_text_changed(self, text: str):
         """Update badge and chip when text changes directly via status_label.setText."""
+        if self._suppress_text_sync:
+            return
+        self._raw_status_text = text
         text_lower = text.lower()
         if "checkmate" in text_lower or "wins" in text_lower or "draw" in text_lower or "game over" in text_lower:
             self.is_game_over = True
@@ -1538,8 +1668,16 @@ class TurnIndicatorBanner(QWidget):
             elif "black" in text_lower:
                 self.color = chess.BLACK
 
+        if not self.is_game_over and self.is_inspect_mode:
+            self.is_inspect_mode = False
+            self._layout.setContentsMargins(18, 6, 18, 6)
+            self._layout.setSpacing(14)
+            self.inspect_actions.hide()
+            self.chip.show()
+
         self.badge.update_state(self.color, self.is_check, self.is_ai_thinking, self.is_game_over, self.is_draw)
         self._apply_chip_style()
+        self._fit_status_font()
         self.update()
 
     def update_turn(self, turn: chess.Color, is_player_turn: bool, is_check: bool = False,
@@ -1552,10 +1690,21 @@ class TurnIndicatorBanner(QWidget):
         self.is_game_over = is_game_over
         self.is_draw = is_draw
 
+        if not is_game_over and self.is_inspect_mode:
+            self.set_inspect_mode(False)
+
         self.badge.update_state(turn, is_check, is_ai_thinking, is_game_over, is_draw)
 
         if custom_text:
-            self.status_label.setText(custom_text)
+            self._raw_status_text = custom_text
+            if self.is_inspect_mode:
+                self._suppress_text_sync = True
+                try:
+                    self.status_label.setText(self._strip_leading_emblem(custom_text))
+                finally:
+                    self._suppress_text_sync = False
+            else:
+                self.status_label.setText(custom_text)
         elif is_game_over:
             pass
         elif is_ai_thinking:
@@ -1571,6 +1720,7 @@ class TurnIndicatorBanner(QWidget):
             self.status_label.setText(f"AI's Turn — {side} to Move")
 
         self._apply_chip_style()
+        self._fit_status_font()
         self.update()
 
     def _apply_chip_style(self):
@@ -2134,12 +2284,15 @@ class AquaChessWindow(QMainWindow):
         # Dedicated Prominent Turn Indicator Banner directly centered above chessboard
         self.turn_banner = TurnIndicatorBanner(self)
         self.status_label = self.turn_banner.status_label
+        self.turn_banner.results_clicked.connect(self._on_inspect_results_clicked)
+        self.turn_banner.new_game_clicked.connect(self.new_game)
         board_layout.addWidget(self.turn_banner, alignment=Qt.AlignmentFlag.AlignHCenter)
 
         # Chess board (center)
         self.chess_board = ChessBoard(self.board)
         self.chess_board.move_made.connect(self.on_player_move)
         self.chess_board.game_over_overlay.play_again_clicked.connect(self.new_game)
+        self.chess_board.game_over_overlay.inspect_mode_changed.connect(self._on_inspect_mode_changed)
         board_layout.addWidget(self.chess_board, stretch=1)
 
         main_layout.addWidget(board_container, stretch=1)
@@ -2554,6 +2707,14 @@ class AquaChessWindow(QMainWindow):
         self.set_busy_state(False)
         self._update_status()
 
+    def _on_inspect_mode_changed(self, inspecting: bool):
+        """Toggle integrated post-game controls inside the top banner without shifting layout."""
+        self.turn_banner.set_inspect_mode(inspecting)
+
+    def _on_inspect_results_clicked(self):
+        """Reopen the victory/game-over summary modal from the banner controls."""
+        self.chess_board.game_over_overlay.set_inspect_mode(False)
+
     def new_game(self):
         """Reset everything for a fresh game."""
         # Cancel any pending AI operations and timers
@@ -2570,6 +2731,7 @@ class AquaChessWindow(QMainWindow):
                 pass
             self.ai_worker = None
 
+        self.turn_banner.set_inspect_mode(False)
         self.chess_board.hide_game_over()
         self.chess_board.reset_animation()
 
